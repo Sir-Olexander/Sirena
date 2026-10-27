@@ -8,6 +8,8 @@ public final class ListeningController {
     public private(set) var isDictating = false { didSet { overlay.setDictating(isDictating) } }
     public var pushToTalkKey: PushToTalkKey?
     public var onStateChange: ((ListeningState) -> Void)?
+    /// Simulation: no microphone, no network recognizer; transcripts are injected through `inject(_:)`.
+    public var simulateInput = false
 
     private let settings: Settings
     private let overlay: OverlayModel
@@ -97,8 +99,18 @@ public final class ListeningController {
         }
     }
 
+    /// Feed a transcript event as if it came from the recognizer (simulation and tests).
+    public func inject(_ event: TranscriptEvent) { handle(event) }
+
     public func turnOn() {
         guard state == .off else { wake(); return }
+        if simulateInput {
+            state = .awake
+            onStateChange?(.awake)
+            overlay.showWorking("Listening (simulated)", autoClear: 1.5)
+            resetIdleTimer()
+            return
+        }
         Permissions.request(.microphone) { [weak self] status in
             guard let self else { return }
             guard status == .granted else {
@@ -126,8 +138,7 @@ public final class ListeningController {
     public func turnOff() {
         guard state != .off else { return }
         stopLocalWake(resumeStream: false)
-        audio.stop()
-        transcriber.stop()
+        if !simulateInput { audio.stop(); transcriber.stop() }
         fallback?.reset()
         idleTimer?.invalidate(); idleTimer = nil
         keywordTimer?.invalidate(); keywordTimer = nil
@@ -160,7 +171,7 @@ public final class ListeningController {
     }
 
     private func startLocalWakeIfPossible() {
-        guard settings.localWakeWord, !usingFallback else { return }
+        guard settings.localWakeWord, !usingFallback, !simulateInput else { return }
         if localWake.canAsk {
             LocalWakeWordDetector.requestAuthorization { [weak self] ok in
                 guard let self, ok, self.state == .waiting else { return }

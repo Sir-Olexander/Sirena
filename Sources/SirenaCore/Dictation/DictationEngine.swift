@@ -6,6 +6,8 @@ public final class DictationEngine {
     public var clientProvider: () -> MetaAPIClient?
     public var modelName: () -> String
     public var skipCleanup: () -> Bool
+    /// Dry run: print instead of inserting (used by `sirena-cli simulate`).
+    public var dryRun = false
     private let inserter: TextInserter
     private var lastChunkEndedWithWhitespace = true
     private var lastInsertAt = Date.distantPast
@@ -41,7 +43,8 @@ public final class DictationEngine {
         let samePlace = continuing && Date().timeIntervalSince(lastInsertAt) < 180 && frontApp?.pid == lastAppPid
         let needsSpace = samePlace && !lastChunkEndedWithWhitespace && !(text.first.map { ".,!?;:)".contains($0) } ?? false)
         let toInsert = (needsSpace ? " " : "") + text
-        await MainActor.run { inserter.insert(toInsert) }
+        if dryRun { print("   [dry run] insert \"\(toInsert)\"") }
+        else { await MainActor.run { inserter.insert(toInsert) } }
         lastChunkEndedWithWhitespace = toInsert.last?.isWhitespace ?? false
         lastInsertAt = Date()
         lastAppPid = frontApp?.pid ?? 0
@@ -50,7 +53,10 @@ public final class DictationEngine {
 
     public func reset() { lastChunkEndedWithWhitespace = true; lastInsertAt = .distantPast; inserter.forget() }
 
-    public func deleteLast() { inserter.deleteLastInserted(); lastChunkEndedWithWhitespace = true }
+    public func deleteLast() {
+        if dryRun { print("   [dry run] delete last chunk"); return }
+        inserter.deleteLastInserted(); lastChunkEndedWithWhitespace = true
+    }
 
     static let systemPrompt = """
     You clean up dictated speech so it can be inserted into a text field exactly as the speaker intended.

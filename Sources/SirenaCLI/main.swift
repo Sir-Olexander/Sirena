@@ -10,6 +10,7 @@ import SirenaCore
 ///   sirena-cli plan-demo                     run the demo commands against a canned snapshot
 ///   sirena-cli snapshot [--no-browser]       print the screen snapshot the model would see
 ///   sirena-cli keywords                      print the vocabulary hints
+///   sirena-cli simulate ["utterance" ...] [--raw]   scripted utterances through router → pipeline (dry run) → overlay model
 
 let args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else {
@@ -165,6 +166,50 @@ case "plan-demo":
         sem.signal()
     }
     sem.wait()
+
+case "simulate":
+    // End-to-end wiring test: scripted utterances → router → pipeline (dry-run executor) → overlay model.
+    let settings = Settings.shared
+    let overlay = OverlayModel()
+    let context = ScreenContext()
+    let numbers = NumbersMode()
+    let client = metaClient()
+    let executor = ActionExecutor(context: context, numbers: numbers, inserter: TextInserter.shared)
+    executor.dryRun = true
+    let planner = ModelCommandPlanner(clientProvider: { client }, modelName: { "muse-spark-1.3" })
+    let cu = ComputerUseAgent(clientProvider: { client }, modelName: { "muse-spark-1.3" })
+    let pipeline = CommandPipeline(context: context, executor: executor, planner: planner, computerUse: cu, overlay: overlay, history: HistoryLog(directory: URL(fileURLWithPath: "/tmp/sirena-sim")), settings: settings)
+    let dictation = DictationEngine(inserter: TextInserter.shared, clientProvider: { client }, modelName: { "muse-spark-1.3" }, skipCleanup: { flags.contains("--raw") })
+    dictation.dryRun = true
+    let transcriber = RealtimeTranscriber(apiKey: nil)
+    let controller = ListeningController(settings: settings, overlay: overlay, context: context, pipeline: pipeline, dictation: dictation,
+                                         transcriber: transcriber, audio: AudioCapture(), fallback: nil, history: HistoryLog(directory: URL(fileURLWithPath: "/tmp/sirena-sim")), numbers: numbers)
+    controller.simulateInput = true
+    let script: [(Double, String)] = positional.isEmpty ? [
+        (0.0, "Sirena, switch to Chrome"), (1.0, "go to the first tab"), (1.0, "scroll down"), (8.0, "switch to Slack"),
+        (0.5, "Sirena, send a message to Claude saying summarize the page I just read"), (2.0, "yes"),
+        (1.0, "Sirena, start dictating"), (1.0, "um so basically the meeting is moved to Friday"), (1.0, "Sirena, stop"),
+        (1.0, "Sirena, wait"), (1.0, "Sirena, scroll down"), (1.0, "Hey Sirena"), (1.0, "Sirena, stop listening"),
+    ] : positional.map { (1.0, $0) }
+    func describe() -> String {
+        "state=\(overlay.state.rawValue) dictating=\(overlay.isDictating) mode=\(overlay.mode) followUp=\(overlay.followUpProgress.map { String(format: "%.2f", $0) } ?? "-") pending=\(pipeline.hasPendingConfirmation)"
+    }
+    print("click → turn on")
+    controller.turnOn()
+    RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+    print("   \(describe())")
+    for (delay, text) in script {
+        RunLoop.main.run(until: Date().addingTimeInterval(delay))
+        print("🎙 \"\(text)\"")
+        controller.inject(.speechStart(turnId: 0))
+        controller.inject(.final(text: text, turnId: 0, asrLatencyMs: 300))
+        let deadline = Date().addingTimeInterval(30)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        while pipeline.isBusy, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.1)) }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        print("   \(describe())")
+    }
+    print("history entries: \(HistoryLog(directory: URL(fileURLWithPath: "/tmp/sirena-sim")).recent(100).count)")
 
 default:
     print("unknown command \(command)")

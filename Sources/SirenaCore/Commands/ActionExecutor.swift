@@ -47,6 +47,8 @@ public final class ActionExecutor {
     private var undoStack: [UndoRecord] = []
     /// Handles `.computerUse` (set by the pipeline).
     public var computerUseHandler: ((String) async throws -> String)?
+    /// Dry run: log what would happen instead of touching the Mac (used by `sirena-cli simulate`).
+    public var dryRun = false
 
     public init(context: ScreenContext, numbers: NumbersMode, inserter: TextInserter) {
         self.context = context; self.numbers = numbers; self.inserter = inserter
@@ -93,6 +95,13 @@ public final class ActionExecutor {
 
     private func perform(_ action: Action, snapshot snap: inout ScreenSnapshot) throws -> String {
         Log.commands.info("perform: \(String(describing: action), privacy: .public)")
+        if dryRun {
+            print("   [dry run] \(action)")
+            if case .switchTo(let t) = action, RunningApps.match(t, in: snap.apps) == nil, RunningApps.installedAppURL(named: t) == nil {
+                throw ExecutionError.unresolved(t)
+            }
+            return action.shortDescription
+        }
         switch action {
         case .pause(let ms):
             usleep(useconds_t(max(0, ms)) * 1000)

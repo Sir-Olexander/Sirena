@@ -78,6 +78,7 @@ swift run sirena-cli parse "Sirena, go to the first tab" --follow-up   # router 
 swift run sirena-cli plan "open the API reference" --no-browser        # Muse Spark plan for the current screen
 swift run sirena-cli plan-demo                                         # the demo commands against a canned snapshot
 swift run sirena-cli snapshot                                          # what the model would see
+swift run sirena-cli simulate                                          # the whole demo script through router → pipeline → overlay, dry run
 ```
 
 Set `SIRENA_DEBUG_DUMP=/some/dir` to write every model request and response body there.
