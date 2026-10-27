@@ -2,20 +2,29 @@ import Foundation
 import Security
 
 /// Loads the Meta Model API key from the environment (MODEL_API_KEY or SIRENA_API_KEY) or the macOS Keychain.
-/// A key found in the environment is copied into the Keychain so later launches from Finder work too.
+/// The app (not the CLI) copies a key found in the environment into the Keychain so later launches from Finder work too.
 public enum APIKeyStore {
     static let service = "ai.sirena.app"
     static let account = "MODEL_API_KEY"
 
-    public static func load() -> String? {
+    public static func environmentKey() -> String? {
         let env = ProcessInfo.processInfo.environment
         for name in ["MODEL_API_KEY", "SIRENA_API_KEY"] {
-            if let key = env[name]?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty {
-                if readKeychain() != key { save(key) }
-                return key
-            }
+            if let key = env[name]?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty { return key }
         }
+        return nil
+    }
+
+    /// Environment first (no Keychain access at all in that case, so command-line tools never trigger a Keychain prompt).
+    public static func load() -> String? {
+        if let key = environmentKey() { return key }
         return readKeychain()
+    }
+
+    /// Called by the app at launch: persist a key that came from the environment.
+    public static func persistEnvironmentKeyIfNeeded() {
+        guard let key = environmentKey() else { return }
+        if readKeychain() != key { save(key) }
     }
 
     @discardableResult

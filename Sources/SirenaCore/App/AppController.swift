@@ -29,6 +29,7 @@ public final class AppController {
     let hotkeys = HotkeyMonitor()
 
     public init() {
+        APIKeyStore.persistEnvironmentKeyIfNeeded()
         let key = APIKeyStore.load()
         metaClient = MetaAPIClient(apiKey: key)
         executor = ActionExecutor(context: context, numbers: numbers, inserter: inserter)
@@ -119,6 +120,7 @@ public final class AppController {
         overlayModel.onConfirm = { [weak self] yes in self?.pipeline.resolveConfirmation(yes) }
         listening.onStateChange = { [weak self] s in
             self?.menuBar.state = s
+            if s == .awake { self?.hotkeys.retryTapIfNeeded() }   // Accessibility may have been granted since launch
         }
         menuBar.onTurnOn = { [weak self] in self?.listening.turnOn() }
         menuBar.onWait = { [weak self] in self?.listening.wait() }
