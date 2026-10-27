@@ -1,0 +1,103 @@
+import XCTest
+@testable import SirenaCore
+
+final class FastPathParserTests: XCTestCase {
+    func parse(_ s: String, ctx: FastPathParser.Context = .init()) -> [Action]? { FastPathParser.parse(s, context: ctx)?.actions }
+
+    func testShortcutsAndWindowsHabits() {
+        XCTAssertEqual(parse("command tab"), [.pressKeys(KeyCombo("tab", [.command]))])
+        XCTAssertEqual(parse("Alt Tab."), [.pressKeys(KeyCombo("tab", [.command]))])
+        XCTAssertEqual(parse("press control c"), [.pressKeys(KeyCombo("c", [.command]))])
+        XCTAssertEqual(parse("press command shift T"), [.pressKeys(KeyCombo("t", [.command, .shift]))])
+        XCTAssertEqual(parse("control alt delete"), [.pressKeys(KeyCombo("escape", [.command, .option]))])
+        XCTAssertEqual(parse("copy"), [.pressKeys(KeyCombo("c", [.command]))])
+        XCTAssertEqual(parse("press enter"), [.pressKeys(KeyCombo("return"))])
+        XCTAssertEqual(parse("hit escape"), [.pressKeys(KeyCombo("escape"))])
+        XCTAssertEqual(parse("F5"), [.pressKeys(KeyCombo("r", [.command]))])
+    }
+
+    func testAppSwitching() {
+        XCTAssertEqual(parse("switch to Chrome"), [.switchTo("chrome")])
+        XCTAssertEqual(parse("Switch to the Google page."), [.switchTo("google")])
+        XCTAssertEqual(parse("open Notes"), [.switchTo("notes")])
+        XCTAssertEqual(parse("go to Slack please"), [.switchTo("slack")])
+        XCTAssertEqual(parse("switch to Claude"), [.switchTo("claude")])
+    }
+
+    func testTabs() {
+        XCTAssertEqual(parse("go to the first tab"), [.switchTab(.first)])
+        XCTAssertEqual(parse("next tab"), [.switchTab(.next)])
+        XCTAssertEqual(parse("tab 3"), [.switchTab(.index(3))])
+        XCTAssertEqual(parse("tab three"), [.switchTab(.index(3))])
+        XCTAssertEqual(parse("go to tab two"), [.switchTab(.index(2))])
+        XCTAssertEqual(parse("switch to the second tab"), [.switchTab(.index(2))])
+        XCTAssertEqual(parse("close tab"), [.closeTab])
+        XCTAssertEqual(parse("the YouTube tab"), [.switchTo("youtube")])
+    }
+
+    func testScrolling() {
+        XCTAssertEqual(parse("scroll down"), [.scroll(.down, .medium)])
+        XCTAssertEqual(parse("Scroll down a lot"), [.scroll(.down, .large)])
+        XCTAssertEqual(parse("scroll up a bit"), [.scroll(.up, .small)])
+        XCTAssertEqual(parse("scroll to the top"), [.scrollTo(top: true)])
+        XCTAssertEqual(parse("page down"), [.pressKeys(KeyCombo("pagedown"))])
+    }
+
+    func testClicks() {
+        XCTAssertEqual(parse("click Send"), [.clickElement("send")])
+        XCTAssertEqual(parse("click the Send button"), [.clickElement("send")])
+        XCTAssertEqual(parse("click 7", ctx: .init(numbersVisible: true)), [.clickNumber(7)])
+        XCTAssertEqual(parse("click number four", ctx: .init(numbersVisible: true)), [.clickNumber(4)])
+        XCTAssertEqual(parse("seven", ctx: .init(numbersVisible: true)), [.clickNumber(7)])
+        XCTAssertEqual(parse("focus the search field"), [.focusElement("search")])
+    }
+
+    func testTyping() {
+        XCTAssertEqual(parse("type Hello world"), [.typeText("Hello world")])
+        XCTAssertEqual(parse("Type \"see you at 5\""), [.typeText("see you at 5")])
+        XCTAssertEqual(parse("write I'll be late"), [.typeText("I'll be late")])
+    }
+
+    func testMessaging() {
+        let actions = parse("send a message to Claude saying summarize the page I just read")
+        XCTAssertEqual(actions?.first, .switchTo("Claude"))
+        XCTAssertTrue(actions?.contains(.typeText("summarize the page I just read")) ?? false)
+        if case .confirmThen(let msg, let inner)? = actions?.last {
+            XCTAssertTrue(msg.contains("Claude"))
+            XCTAssertEqual(inner, [.pressReturnToSend])
+        } else {
+            XCTFail("expected a confirmation step, got \(String(describing: actions))")
+        }
+        let reply = parse("reply saying sounds good")
+        XCTAssertEqual(reply?.first, .focusComposer)
+        let tell = parse("tell Slack that I'm running late")
+        XCTAssertEqual(tell?.first, .switchTo("Slack"))
+        XCTAssertTrue(tell?.contains(.typeText("I'm running late")) ?? false)
+    }
+
+    func testControls() {
+        XCTAssertEqual(parse("wait"), [.wait])
+        XCTAssertEqual(parse("pause"), [.wait])
+        XCTAssertEqual(parse("stop listening"), [.turnOff])
+        XCTAssertEqual(parse("start dictating"), [.startDictation])
+        XCTAssertEqual(parse("stop", ctx: .init(isDictating: true)), [.stopDictation])
+        XCTAssertEqual(parse("stop dictating"), [.stopDictation])
+        XCTAssertEqual(parse("show numbers"), [.showNumbers])
+        XCTAssertEqual(parse("hide numbers"), [.hideNumbers])
+        XCTAssertEqual(parse("undo"), [.undo])
+        XCTAssertEqual(parse("delete that"), [.deleteLastChunk])
+        XCTAssertEqual(parse("new line"), [.newLine])
+    }
+
+    func testNavigationAndSearch() {
+        XCTAssertEqual(parse("search for swift concurrency"), [.webSearch("swift concurrency")])
+        XCTAssertEqual(parse("go back"), [.goBack])
+        XCTAssertEqual(parse("open github dot com"), [.openURL("github dot com")])
+    }
+
+    func testUnknownFallsThrough() {
+        XCTAssertNil(parse("what's the weather like"))
+        XCTAssertNil(parse("summarize this page for me"))
+        XCTAssertNil(parse("make the font bigger in this document and save it as a pdf"))
+    }
+}

@@ -1,0 +1,8 @@
+.temp/
+.build/
+.swiftpm/
+*.xcodeproj/xcuserdata/
+DerivedData/
+.DS_Store
+.env
+*.log
