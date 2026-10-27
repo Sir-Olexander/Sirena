@@ -34,6 +34,16 @@ public final class ListeningController {
     private var reconnectNoteShown = false
     private var lastDictationChunkAt = Date.distantPast
     private var lastFrontPid: pid_t = 0
+    /// Dictation work runs strictly in order: inserts, "delete that" and "new line" wait for earlier chunks still being cleaned up.
+    private var dictationChain: Task<Void, Never>?
+
+    private func enqueueDictation(_ work: @escaping () async -> Void) {
+        let previous = dictationChain
+        dictationChain = Task {
+            await previous?.value
+            await work()
+        }
+    }
 
     public init(settings: Settings, overlay: OverlayModel, context: ScreenContext, pipeline: CommandPipeline, dictation: DictationEngine,
                 transcriber: RealtimeTranscriber, audio: AudioCapture, fallback: OneShotTranscriber?, history: HistoryLog, numbers: NumbersMode) {
@@ -309,7 +319,7 @@ public final class ListeningController {
             lastDictationChunkAt = Date()
             let front = RunningApps.frontmost()
             overlay.showWorking(settings.rawDictation ? "Typing…" : "Cleaning up…", autoClear: 4)
-            Task {
+            enqueueDictation { [self] in
                 let t0 = Date()
                 let res = await dictation.insert(raw: dictated, continuing: continuing, frontApp: front)
                 let total = Int(Date().timeIntervalSince(t0) * 1000)
@@ -368,11 +378,14 @@ public final class ListeningController {
             else { pipeline.cancelPending(silently: false) }
             if numbers.isVisible { numbers.hide(); overlay.setNumbersVisible(false) }
         case .newLine:
-            let front = RunningApps.frontmost()?.name.lowercased() ?? ""
-            let chatApp = FastPathParser.chatApps.contains { front.contains($0) }
-            Keyboard.press(chatApp ? KeyCombo("return", [.shift]) : KeyCombo("return"))
+            enqueueDictation { [dictation] in
+                let front = RunningApps.frontmost()?.name.lowercased() ?? ""
+                let chatApp = FastPathParser.chatApps.contains { front.contains($0) }
+                if dictation.dryRun { print("   [dry run] new line") } else { Keyboard.press(chatApp ? KeyCombo("return", [.shift]) : KeyCombo("return")) }
+                dictation.noteNewLine()
+            }
         case .deleteLastChunk:
-            dictation.deleteLast()
+            enqueueDictation { [dictation] in dictation.deleteLast() }
         case .say(let s):
             overlay.showMessage(s, autoClear: 6)
         default:

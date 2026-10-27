@@ -53,6 +53,9 @@ public final class DictationEngine {
 
     public func reset() { lastChunkEndedWithWhitespace = true; lastInsertAt = .distantPast; inserter.forget() }
 
+    /// A line break was inserted: the next chunk starts a new line and needs no leading space.
+    public func noteNewLine() { lastChunkEndedWithWhitespace = true }
+
     public func deleteLast() {
         if dryRun { print("   [dry run] delete last chunk"); return }
         inserter.deleteLastInserted(); lastChunkEndedWithWhitespace = true
@@ -68,6 +71,12 @@ public final class DictationEngine {
     - Keep the speaker's words, meaning and language. Do not summarize, answer, translate or add anything.
     - Match the tone to the destination app described in the request (casual in chat apps, formal in email, neutral elsewhere) without changing the content.
     Output only the cleaned text, with no quotes, labels or commentary.
+
+    Examples:
+    "um so basically the meeting is, no wait, moved to Friday" → "The meeting is moved to Friday."
+    "can you uh send me the the report by tomorrow question mark" → "Can you send me the report by tomorrow?"
+    "we need three things first the budget second the timeline and third the team" → "We need three things:\n1. The budget\n2. The timeline\n3. The team"
+    "ok see you at five" (chat app) → "ok see you at 5"
     """
 
     func cleanup(_ raw: String, app: AppInfo?, client: MetaAPIClient) async -> String? {
