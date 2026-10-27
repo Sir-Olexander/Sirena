@@ -52,6 +52,17 @@ public enum WakeWord {
 
     public static func startsWithName(_ text: String) -> Bool { stripLeadingName(text) != nil }
 
+    /// Matches a leading "Hey Sirena" (a lead-in word is required) and returns the rest, or nil.
+    private static let leadingWakeRegex = try! NSRegularExpression(
+        pattern: "^[\\s\"'“”‘’(\\[]*(?:hey|hi|ok|okay|hello|yo|hay)[,\\s]+" + namePattern + "(?=[\\s,.!?:;\\-–—]|$)[\\s,.!?:;\\-–—]*",
+        options: [.caseInsensitive])
+
+    public static func stripLeadingWakePhrase(_ text: String) -> String? {
+        let ns = text as NSString
+        guard let m = leadingWakeRegex.firstMatch(in: text, options: [], range: NSRange(location: 0, length: ns.length)) else { return nil }
+        return ns.substring(from: m.range.location + m.range.length).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// "Hey Sirena", "Sirena, wake up", "wake up Sirena".
     public static func isWakePhrase(_ text: String) -> Bool {
         let ns = text as NSString

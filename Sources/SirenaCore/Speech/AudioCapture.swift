@@ -8,8 +8,8 @@ public final class AudioCapture {
 
     /// Called on an audio thread with each 80 ms chunk.
     public var onChunk: ((Data) -> Void)?
-    /// Called on an audio thread with an RMS level in 0...1 (roughly) per chunk.
-    public var onLevel: ((Float) -> Void)?
+    /// Called on an audio thread with an RMS level in 0...1 (roughly) and the duration it covers, per capture buffer.
+    public var onLevel: ((Float, Double) -> Void)?
     /// Called on an audio thread with the raw microphone buffer (native format), for on-device recognition.
     public var onBuffer: ((AVAudioPCMBuffer) -> Void)?
 
@@ -87,7 +87,7 @@ public final class AudioCapture {
         var sum: Float = 0
         for s in samples { let f = Float(s) / 32768; sum += f * f }
         let rms = sqrt(sum / Float(max(count, 1)))
-        onLevel?(min(1, rms * 6))
+        onLevel?(min(1, rms * 6), Double(count) / outFormat.sampleRate)
         // Chunking
         pending.append(UnsafeBufferPointer(start: ch[0], count: count))
         while pending.count >= AudioCapture.chunkBytes {

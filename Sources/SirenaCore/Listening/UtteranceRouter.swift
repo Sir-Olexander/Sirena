@@ -9,20 +9,30 @@ public struct RouterContext: Equatable {
     public var inFollowUpWindow: Bool
     public var numbersVisible: Bool
     public var pushToTalk: PushToTalkKey?
+    /// Sirena is reading aloud: reading controls work without the name, everything else needs it.
+    public var isReading: Bool
 
     public init(state: ListeningState, isDictating: Bool = false, hasPendingConfirmation: Bool = false,
-                inFollowUpWindow: Bool = false, numbersVisible: Bool = false, pushToTalk: PushToTalkKey? = nil) {
+                inFollowUpWindow: Bool = false, numbersVisible: Bool = false, pushToTalk: PushToTalkKey? = nil, isReading: Bool = false) {
         self.state = state; self.isDictating = isDictating; self.hasPendingConfirmation = hasPendingConfirmation
         self.inFollowUpWindow = inFollowUpWindow; self.numbersVisible = numbersVisible; self.pushToTalk = pushToTalk
+        self.isReading = isReading
     }
+}
+
+public enum ReadingControl: String, Codable, Equatable {
+    case stop, pause, resume, faster, slower
 }
 
 public enum Route: Equatable {
     case wake
+    /// "Hey Sirena, <command>" said while waiting: wake up and run the command.
+    case wakeWithCommand(String)
     /// Command text with the name removed. Empty string = the user just said "Sirena" (attention).
     case command(String)
     case confirm(Bool)
     case dictation(String)
+    case reading(ReadingControl)
     case ignore(String)
 }
 
@@ -44,9 +54,21 @@ public enum UtteranceRouter {
         case .off:
             return .ignore("off")
         case .waiting:
-            return WakeWord.isWakePhrase(text) ? .wake : .ignore("waiting")
+            if WakeWord.isWakePhrase(text) { return .wake }
+            if let rest = WakeWord.stripLeadingWakePhrase(text), !WakeWord.normalize(rest).isEmpty { return .wakeWithCommand(rest) }
+            return .ignore("waiting")
         case .awake:
             break
+        }
+
+        if context.isReading {
+            let candidate = WakeWord.stripLeadingName(text).map(WakeWord.normalize) ?? norm
+            if let control = readingControl(candidate) { return .reading(control) }
+            if let rest = WakeWord.stripLeadingName(text) {
+                if WakeWord.isWakePhrase(text) { return .wake }
+                return .command(rest)
+            }
+            return .ignore("reading")
         }
 
         if let ptt = context.pushToTalk {
@@ -77,6 +99,18 @@ public enum UtteranceRouter {
         if context.numbersVisible, let n = Numbers.parse(norm) { return .command("click \(n)") }
         return .ignore("no name")
     }
+}
+
+extension UtteranceRouter {
+    static let readingWords: [String: ReadingControl] = [
+        "stop": .stop, "stop reading": .stop, "stop it": .stop, "enough": .stop, "that's enough": .stop, "quiet": .stop, "shut up": .stop, "be quiet": .stop,
+        "pause": .pause, "pause reading": .pause, "wait": .pause, "hold on": .pause, "pause it": .pause, "hold": .pause,
+        "resume": .resume, "resume reading": .resume, "continue": .resume, "continue reading": .resume, "go on": .resume, "keep reading": .resume, "keep going": .resume, "play": .resume, "go ahead": .resume,
+        "faster": .faster, "read faster": .faster, "speed up": .faster, "go faster": .faster, "a bit faster": .faster, "quicker": .faster, "faster please": .faster,
+        "slower": .slower, "read slower": .slower, "slow down": .slower, "go slower": .slower, "a bit slower": .slower, "slower please": .slower,
+    ]
+
+    public static func readingControl(_ normalized: String) -> ReadingControl? { readingWords[normalized] }
 }
 
 /// Small helper for spoken numbers.

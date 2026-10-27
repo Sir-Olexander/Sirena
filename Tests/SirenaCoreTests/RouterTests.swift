@@ -34,6 +34,39 @@ final class RouterTests: XCTestCase {
         let ctx = RouterContext(state: .waiting)
         XCTAssertEqual(UtteranceRouter.route("Sirena, next tab", context: ctx), .ignore("waiting"))
         XCTAssertEqual(UtteranceRouter.route("Hey Sirena", context: ctx), .wake)
+        XCTAssertEqual(UtteranceRouter.route("Hey Sirena, switch to Chrome.", context: ctx), .wakeWithCommand("switch to Chrome."))
+        XCTAssertEqual(UtteranceRouter.route("hey serena next tab", context: ctx), .wakeWithCommand("next tab"))
+        XCTAssertEqual(UtteranceRouter.route("I said hey Sirena earlier", context: ctx), .ignore("waiting"))
+    }
+
+    func testOnDeviceWakePhrase() {
+        XCTAssertTrue(LocalWakeWordDetector.containsWakePhrase("Hey Sirena"))
+        XCTAssertTrue(LocalWakeWordDetector.containsWakePhrase("hey Serena switch to Chrome"))
+        XCTAssertTrue(LocalWakeWordDetector.containsWakePhrase("okay so hey Sereena"))
+        XCTAssertTrue(LocalWakeWordDetector.containsWakePhrase("Sirena wake up"))
+        XCTAssertTrue(LocalWakeWordDetector.containsWakePhrase("hey siren a"))
+        XCTAssertFalse(LocalWakeWordDetector.containsWakePhrase("I'm building Sirena"))
+        XCTAssertFalse(LocalWakeWordDetector.containsWakePhrase("the meeting is at noon"))
+    }
+
+    func testStreamGate() {
+        let gate = StreamGate()
+        let a = Data([1, 2]), b = Data([3, 4]), c = Data([5, 6])
+        XCTAssertEqual(gate.process(a), [a])
+        gate.goPrivate()
+        XCTAssertEqual(gate.process(b), [Data(count: 2)])
+        gate.goLive(replay: true)
+        XCTAssertEqual(gate.process(c), [b, c])
+        XCTAssertEqual(gate.process(a), [a])
+    }
+
+    func testReadingRoutes() {
+        let ctx = RouterContext(state: .awake, inFollowUpWindow: true, isReading: true)
+        XCTAssertEqual(UtteranceRouter.route("Stop.", context: ctx), .reading(.stop))
+        XCTAssertEqual(UtteranceRouter.route("slower", context: ctx), .reading(.slower))
+        XCTAssertEqual(UtteranceRouter.route("Sirena, pause", context: ctx), .reading(.pause))
+        XCTAssertEqual(UtteranceRouter.route("the quick brown fox", context: ctx), .ignore("reading"))
+        XCTAssertEqual(UtteranceRouter.route("Sirena, switch to Notes", context: ctx), .command("switch to Notes"))
     }
 
     func testDictation() {

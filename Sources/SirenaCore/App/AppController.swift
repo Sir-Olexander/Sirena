@@ -65,6 +65,7 @@ public final class AppController {
         }
         hotkeys.start()
         detectLocalModel()
+        probeLocalWakeWord()
         Log.app.info("Sirena started (key: \(key != nil ? "present" : "missing", privacy: .public))")
     }
 
@@ -102,6 +103,17 @@ public final class AppController {
                     return
                 }
             }
+        }
+    }
+
+    /// Find out at launch whether on-device recognition really works (it fails when Dictation is off).
+    func probeLocalWakeWord() {
+        let detector = LocalWakeWordDetector()
+        guard !detector.canAsk else { return }   // permission not asked yet: try when Sirena first waits
+        detector.probe { [weak self] ok, reason in
+            guard let self else { return }
+            Log.speech.notice("on-device wake word probe: \(ok) \(reason ?? "", privacy: .public)")
+            self.listening.noteLocalWakeProbe(works: ok, reason: reason)
         }
     }
 
@@ -153,6 +165,12 @@ public final class AppController {
             }.joined(separator: "  ")
         }
         menuBar.apiKeyPresent = { [weak self] in self?.metaClient.apiKey != nil }
+        menuBar.localWakeStatus = { [weak self] in self?.listening.localWakeStatus ?? "" }
+        menuBar.onLocalWakeToggled = { [weak self] in
+            guard let self else { return }
+            self.listening.resetLocalWakeFailure()
+            self.probeLocalWakeWord()
+        }
         onboarding.onKeySaved = { [weak self] in self?.reloadKey() }
 
         hotkeys.onToggle = { [weak self] in

@@ -22,8 +22,14 @@ public final class ListeningController {
     private let history: HistoryLog
     private let numbers: NumbersMode
     private let localWake = LocalWakeWordDetector()
-    /// True while the Meta stream is paused and the on-device detector listens for the wake phrase.
+    /// Sends real audio, or zeros plus a local pre-roll while the on-device detector listens.
+    private let gate = StreamGate()
+    /// True while the on-device detector listens for the wake phrase.
     public private(set) var localWakeActive = false
+    /// Why the on-device wake word cannot be used in this run (nil = not known to be broken).
+    public private(set) var localWakeFailure: String?
+    public var onLocalWakeStatusChange: (() -> Void)?
+    private var wokeAt = Date.distantPast
 
     private var followUpUntil: Date?
     private var followUpTimer: Timer?
@@ -34,6 +40,7 @@ public final class ListeningController {
     private var reconnectNoteShown = false
     private var lastDictationChunkAt = Date.distantPast
     private var lastFrontPid: pid_t = 0
+    public private(set) var lastWakeMethod: String?
     /// Dictation work runs strictly in order: inserts, "delete that" and "new line" wait for earlier chunks still being cleaned up.
     private var dictationChain: Task<Void, Never>?
 
@@ -58,13 +65,18 @@ public final class ListeningController {
         fallback?.keywordsProvider = { [weak self] in self?.context.keywords() ?? ["Sirena"] }
         fallback?.onEvent = { [weak self] e in self?.handle(e) }
         audio.onChunk = { [weak self] pcm in
-            guard let self, !self.localWakeActive else { return }
-            if self.usingFallback { self.fallback?.send(pcm, level: self.lastLevel) } else { self.transcriber.send(pcm) }
+            guard let self else { return }
+            for chunk in self.gate.process(pcm) {
+                if self.usingFallback { self.fallback?.send(chunk, level: self.gate.privateMode ? 0 : self.lastLevel) } else { self.transcriber.send(chunk) }
+            }
         }
-        audio.onLevel = { [weak self] level in
+        audio.onLevel = { [weak self] level, seconds in
             guard let self else { return }
             self.lastLevel = level
             self.overlay.pushLevel(level)
+            if self.localWakeActive {
+                DispatchQueue.main.async { [weak self] in self?.localWake.noteLevel(level, seconds: seconds) }
+            }
         }
         audio.onBuffer = { [weak self] buffer in
             guard let self, self.localWakeActive else { return }
@@ -72,8 +84,19 @@ public final class ListeningController {
         }
         localWake.onWake = { [weak self] in
             guard let self, self.state == .waiting else { return }
-            self.history.append(HistoryEntry(utterance: "(on-device) hey sirena", route: "wake"))
-            self.wake()
+            self.history.append(HistoryEntry(utterance: "(on-device) hey sirena", route: "wake", wakeMethod: "on-device"))
+            self.wake(method: "on-device")
+        }
+        localWake.onFailure = { [weak self] reason in
+            guard let self else { return }
+            Log.listening.error("on-device wake word failed: \(reason, privacy: .public); falling back to the stream")
+            self.localWakeFailure = reason
+            self.stopLocalWake(replay: false)
+            self.history.append(HistoryEntry(utterance: "(on-device wake word unavailable)", route: "wake-fallback", result: reason))
+            if self.state == .waiting {
+                self.overlay.showMessage("On-device wake word unavailable — listening for “Hey Sirena” through the normal stream", autoClear: 5)
+            }
+            self.onLocalWakeStatusChange?()
         }
         pipeline.onControl = { [weak self] a in self?.handleControl(a) }
         pipeline.fastPathContext = { [weak self] in
@@ -104,16 +127,36 @@ public final class ListeningController {
     public func toggle() {
         switch state {
         case .off: turnOn()
-        case .waiting: wake()
+        case .waiting: wake(method: "click")
         case .awake: turnOff()
         }
+    }
+
+    /// Result of the launch-time probe of on-device recognition.
+    public func noteLocalWakeProbe(works: Bool, reason: String?) {
+        localWakeFailure = works ? nil : (reason ?? "unavailable")
+        onLocalWakeStatusChange?()
+    }
+
+    /// Forget an earlier on-device failure (e.g. after the user enabled Dictation or toggled the setting).
+    public func resetLocalWakeFailure() {
+        localWakeFailure = nil
+        onLocalWakeStatusChange?()
+        if state == .waiting { startLocalWakeIfPossible() }
+    }
+
+    public var localWakeStatus: String {
+        if !settings.localWakeWord { return "off" }
+        if let f = localWakeFailure { return "unavailable: \(f)" }
+        if localWakeActive { return gate.privateMode ? "active (no audio leaves the Mac)" : "starting" }
+        return "ready"
     }
 
     /// Feed a transcript event as if it came from the recognizer (simulation and tests).
     public func inject(_ event: TranscriptEvent) { handle(event) }
 
-    public func turnOn() {
-        guard state == .off else { wake(); return }
+    public func turnOn(method: String = "click") {
+        guard state == .off else { wake(method: method); return }
         if simulateInput {
             state = .awake
             onStateChange?(.awake)
@@ -147,7 +190,7 @@ public final class ListeningController {
 
     public func turnOff() {
         guard state != .off else { return }
-        stopLocalWake(resumeStream: false)
+        stopLocalWake(replay: false)
         if !simulateInput { audio.stop(); transcriber.stop() }
         fallback?.reset()
         idleTimer?.invalidate(); idleTimer = nil
@@ -181,7 +224,7 @@ public final class ListeningController {
     }
 
     private func startLocalWakeIfPossible() {
-        guard settings.localWakeWord, !usingFallback, !simulateInput else { return }
+        guard settings.localWakeWord, localWakeFailure == nil, !usingFallback, !simulateInput else { return }
         if localWake.canAsk {
             LocalWakeWordDetector.requestAuthorization { [weak self] ok in
                 guard let self, ok, self.state == .waiting else { return }
@@ -198,24 +241,33 @@ public final class ListeningController {
         localWakeActive = true
         localWake.start()
         guard localWake.isRunning else { localWakeActive = false; return }
-        // Nothing leaves the Mac until "Hey Sirena".
-        transcriber.stop()
-        overlay.setConnection(nil)
-        overlay.setPrivateListening(true)
-        Log.listening.info("waiting with on-device wake word; Meta stream paused")
+        // Keep streaming real audio until the detector has proven it runs (errors such as
+        // "Siri and Dictation are disabled" arrive within milliseconds), then send zeros instead.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+            guard let self, self.localWakeActive, self.localWake.isRunning, self.state == .waiting else { return }
+            self.gate.goPrivate()
+            self.overlay.setPrivateListening(true)
+            self.onLocalWakeStatusChange?()
+            Log.listening.notice("waiting with the on-device wake word; zeros are streamed instead of audio")
+        }
     }
 
-    private func stopLocalWake(resumeStream: Bool) {
+    private func stopLocalWake(replay: Bool) {
         guard localWakeActive else { return }
         localWakeActive = false
         localWake.stop()
+        gate.goLive(replay: replay)
         overlay.setPrivateListening(false)
-        if resumeStream { transcriber.start() }
+        onLocalWakeStatusChange?()
     }
 
-    public func wake() {
+    public func wake(method: String = "stream") {
         guard state == .waiting else { return }
-        stopLocalWake(resumeStream: true)
+        // On an on-device wake, send the last seconds of real audio so a command said right after
+        // "Hey Sirena" reaches the recognizer too.
+        stopLocalWake(replay: method == "on-device")
+        wokeAt = Date()
+        lastWakeMethod = method
         state = .awake
         onStateChange?(.awake)
         overlay.showWorking("I'm here", autoClear: 1.5)
@@ -299,8 +351,18 @@ public final class ListeningController {
         if state == .awake { resetIdleTimer() }
         switch decision {
         case .wake:
-            if state == .waiting { wake() } else { overlay.showWorking("Yes?", autoClear: 1.5); openFollowUpWindow() }
-            history.append(HistoryEntry(utterance: text, route: "wake", latency: LatencyReport(asrMs: asrMs)))
+            if state == .waiting {
+                wake(method: "stream")
+                history.append(HistoryEntry(utterance: text, route: "wake", latency: LatencyReport(asrMs: asrMs), wakeMethod: "stream"))
+            } else {
+                // The stream's transcript of a phrase the on-device detector already acted on: no second greeting.
+                if Date().timeIntervalSince(wokeAt) > 5 { overlay.showWorking("Yes?", autoClear: 1.5) }
+                openFollowUpWindow()
+            }
+        case .wakeWithCommand(let cmd):
+            wake(method: "stream")
+            history.append(HistoryEntry(utterance: text, route: "wake", latency: LatencyReport(asrMs: asrMs), wakeMethod: "stream"))
+            pipeline.handle(command: cmd, asrMs: asrMs)
         case .command(let cmd):
             if cmd.isEmpty {
                 overlay.showWorking("Yes?", autoClear: 1.5)
@@ -330,6 +392,8 @@ public final class ListeningController {
                 }
                 self.history.append(HistoryEntry(utterance: dictated, route: "dictation", layer: latency.layer, action: "insert", result: res.inserted, latency: latency))
             }
+        case .reading:
+            break
         case .ignore(let why):
             history.append(HistoryEntry(utterance: text, route: "ignored (\(why))", latency: LatencyReport(asrMs: asrMs)))
             if state == .awake, !isDictating, why == "no name" {

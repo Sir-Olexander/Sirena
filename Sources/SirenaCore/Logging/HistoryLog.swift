@@ -25,7 +25,8 @@ public struct LatencyReport: Codable, Equatable {
 }
 
 /// One line of the local history file. No audio is ever stored.
-public struct HistoryEntry: Codable {
+public struct HistoryEntry: Codable, Identifiable {
+    public var id: String { "\(timestamp.timeIntervalSince1970)-\(utterance.hashValue)-\(route)" }
     public var timestamp: Date
     public var utterance: String
     public var route: String
@@ -33,17 +34,31 @@ public struct HistoryEntry: Codable {
     public var action: String?
     public var result: String?
     public var latency: LatencyReport?
+    /// Sirena session (turn on → turn off) this entry belongs to.
+    public var sessionId: String?
+    /// The command text the pipeline received (name removed), for "run again" and learning.
+    public var command: String?
+    /// Structured actions that ran, for "run again" and learning.
+    public var actions: [Action]?
+    public var failed: Bool?
+    public var wakeMethod: String?
+    public var shortcutId: String?
 
-    public init(utterance: String, route: String, layer: String? = nil, action: String? = nil, result: String? = nil, latency: LatencyReport? = nil) {
+    public init(utterance: String, route: String, layer: String? = nil, action: String? = nil, result: String? = nil, latency: LatencyReport? = nil,
+                command: String? = nil, actions: [Action]? = nil, failed: Bool? = nil, wakeMethod: String? = nil, shortcutId: String? = nil) {
         self.timestamp = Date()
         self.utterance = utterance; self.route = route; self.layer = layer
         self.action = action; self.result = result; self.latency = latency
+        self.sessionId = HistoryLog.currentSessionId
+        self.command = command; self.actions = actions; self.failed = failed; self.wakeMethod = wakeMethod; self.shortcutId = shortcutId
     }
 }
 
 /// Append-only JSONL log in ~/Library/Application Support/Sirena/history.jsonl
 public final class HistoryLog {
     public static let shared = HistoryLog()
+    /// Set while Sirena is on; stamped on every entry.
+    public static var currentSessionId: String?
     public let url: URL
     private let queue = DispatchQueue(label: "ai.sirena.history")
     private let encoder: JSONEncoder = {
@@ -57,6 +72,7 @@ public final class HistoryLog {
     }
 
     public func append(_ entry: HistoryEntry) {
+        onAppend?(entry)
         queue.async { [self] in
             guard var data = try? encoder.encode(entry) else { return }
             data.append(0x0A)
@@ -69,6 +85,9 @@ public final class HistoryLog {
             }
         }
     }
+
+    /// Called for every appended entry (on the caller's thread), e.g. for session statistics.
+    public var onAppend: ((HistoryEntry) -> Void)?
 
     public func recent(_ count: Int = 50) -> [HistoryEntry] {
         guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
