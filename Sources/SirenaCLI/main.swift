@@ -209,6 +209,8 @@ case "simulate":
         RunLoop.main.run(until: Date().addingTimeInterval(0.2))
         print("   \(describe())")
     }
+    // Let slow dictation cleanups finish before exiting.
+    RunLoop.main.run(until: Date().addingTimeInterval(4))
     print("history entries: \(HistoryLog(directory: URL(fileURLWithPath: "/tmp/sirena-sim")).recent(100).count)")
 
 default:
