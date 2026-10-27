@@ -58,6 +58,7 @@ final class OverlayContainerView: NSView {
 }
 
 /// A floating, non-activating panel that never becomes key, floats above full-screen apps, and lives on every Space.
+/// There is one per screen; each remembers its own position (bottom-center anchor, relative to its screen).
 public final class OverlayPanel: NSPanel {
     private let model: OverlayModel
     private var hosting: NSHostingView<OverlayView>!
@@ -66,12 +67,15 @@ public final class OverlayPanel: NSPanel {
     private var anchor: CGPoint   // bottom-center of the pill in screen coordinates
     private let settings: Settings
     private var lastSize: CGSize = .zero
+    private var screenRef: NSScreen
+    public let screenID: String
 
-    public init(model: OverlayModel, settings: Settings) {
+    public init(model: OverlayModel, settings: Settings, screen: NSScreen, screenID: String) {
         self.model = model
         self.settings = settings
-        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        anchor = settings.overlayPosition ?? CGPoint(x: screen.midX, y: screen.minY + 24)
+        self.screenRef = screen
+        self.screenID = screenID
+        anchor = OverlayPanel.savedAnchor(settings: settings, screen: screen, id: screenID)
         super.init(contentRect: NSRect(x: anchor.x - 20, y: anchor.y, width: 40, height: 40),
                    styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         isFloatingPanel = true
@@ -86,12 +90,11 @@ public final class OverlayPanel: NSPanel {
         becomesKeyOnlyIfNeeded = true
         animationBehavior = .utilityWindow
         acceptsMouseMovedEvents = false
-        hosting = NSHostingView(rootView: OverlayView(model: model))
+        hosting = NSHostingView(rootView: OverlayView(model: model, screenID: screenID))
         container = OverlayContainerView(hosting: hosting)
         container.model = model
         container.onDragEnded = { [weak self] in self?.didMove() }
         contentView = container
-        NotificationCenter.default.addObserver(self, selector: #selector(screenChanged), name: NSApplication.didChangeScreenParametersNotification, object: nil)
         cancellable = model.objectWillChange.sink { [weak self] _ in
             DispatchQueue.main.async { self?.fitToContent(animated: true) }
         }
@@ -103,17 +106,25 @@ public final class OverlayPanel: NSPanel {
 
     public var windowID: CGWindowID { CGWindowID(windowNumber) }
 
+    /// Default: bottom center of the screen. Saved positions are offsets from the screen's origin.
+    static func savedAnchor(settings: Settings, screen: NSScreen, id: String) -> CGPoint {
+        let f = screen.frame, vf = screen.visibleFrame
+        if let off = settings.overlayOffset(forScreen: id) {
+            return CGPoint(x: f.minX + off.x, y: f.minY + off.y)
+        }
+        if let legacy = settings.overlayPosition, f.contains(legacy) { return legacy }
+        return CGPoint(x: vf.midX, y: vf.minY + 24)
+    }
+
     /// Resizes the panel to the SwiftUI content, keeping the bottom-center anchored.
     public func fitToContent(animated: Bool) {
         let size = hosting.fittingSize
         guard size.width > 0, size.height > 0, size != lastSize else { return }
         lastSize = size
         var frame = NSRect(x: anchor.x - size.width / 2, y: anchor.y, width: size.width, height: size.height)
-        if let screen = screenForAnchor() {
-            let vf = screen.visibleFrame
-            frame.origin.x = max(vf.minX, min(frame.origin.x, vf.maxX - frame.width))
-            frame.origin.y = max(vf.minY, min(frame.origin.y, vf.maxY - frame.height))
-        }
+        let vf = screenRef.visibleFrame
+        frame.origin.x = max(vf.minX, min(frame.origin.x, vf.maxX - frame.width))
+        frame.origin.y = max(vf.minY, min(frame.origin.y, vf.maxY - frame.height))
         if animated {
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.18
@@ -125,26 +136,26 @@ public final class OverlayPanel: NSPanel {
         }
     }
 
-    private func screenForAnchor() -> NSScreen? {
-        NSScreen.screens.first { $0.frame.contains(CGPoint(x: anchor.x, y: anchor.y + 1)) } ?? NSScreen.main
-    }
-
-    /// Dragging changes the anchor (bottom-center).
+    /// Dragging changes the anchor (bottom-center), remembered for this screen.
     private func didMove() {
         let f = frame
         anchor = CGPoint(x: f.midX, y: f.minY)
-        settings.overlayPosition = anchor
+        let origin = screenRef.frame.origin
+        settings.setOverlayOffset(CGPoint(x: anchor.x - origin.x, y: anchor.y - origin.y), forScreen: screenID)
     }
 
-    @objc private func screenChanged() {
+    /// The screen's geometry changed (resolution, arrangement).
+    public func screenChanged(_ screen: NSScreen) {
+        screenRef = screen
+        anchor = OverlayPanel.savedAnchor(settings: settings, screen: screen, id: screenID)
         lastSize = .zero
         fitToContent(animated: false)
     }
 
     public func resetPosition() {
-        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        anchor = CGPoint(x: screen.midX, y: screen.minY + 24)
-        settings.overlayPosition = nil
+        settings.setOverlayOffset(nil, forScreen: screenID)
+        let vf = screenRef.visibleFrame
+        anchor = CGPoint(x: vf.midX, y: vf.minY + 24)
         lastSize = .zero
         fitToContent(animated: true)
     }

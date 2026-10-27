@@ -78,12 +78,31 @@ public enum RunningApps {
         return nil
     }
 
-    /// Finds an installed (not necessarily running) app by spoken name.
-    public static func installedAppURL(named query: String) -> URL? {
+    /// A running app whose name (localized, English, or a well-known alias) is exactly what was said.
+    public static func exactMatch(_ query: String, in apps: [AppInfo]? = nil) -> AppInfo? {
+        let apps = apps ?? list()
         let q = Fuzzy.normalize(query)
-        let candidates = [aliases[q], query].compactMap { $0 }
+        guard !q.isEmpty else { return nil }
+        let wanted = Set([q, aliases[q].map(Fuzzy.normalize)].compactMap { $0 })
+        return apps.first { wanted.contains(Fuzzy.normalize($0.name)) || wanted.contains(Fuzzy.normalize(englishName($0))) }
+    }
+
+    /// An installed app whose name is exactly what was said (or its alias).
+    public static func installedAppURL(exactly query: String) -> URL? {
+        let q = Fuzzy.normalize(query)
+        guard !q.isEmpty else { return nil }
+        let wanted = Set([q, aliases[q].map(Fuzzy.normalize)].compactMap { $0 })
+        for (name, url) in installedApps() where wanted.contains(Fuzzy.normalize(name)) { return url }
+        return nil
+    }
+
+    private static var installedCache: (apps: [(String, URL)], at: Date)?
+
+    static func installedApps() -> [(String, URL)] {
+        if let c = installedCache, Date().timeIntervalSince(c.at) < 120 { return c.apps }
         let dirs = ["/Applications", "/System/Applications", "/System/Applications/Utilities", "/Applications/Utilities",
-                    FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications").path]
+                    FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications").path,
+                    FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications/Chrome Apps.localized").path]
         var apps: [(String, URL)] = []
         for d in dirs {
             guard let items = try? FileManager.default.contentsOfDirectory(atPath: d) else { continue }
@@ -91,6 +110,15 @@ public enum RunningApps {
                 apps.append((String(item.dropLast(4)), URL(fileURLWithPath: d).appendingPathComponent(item)))
             }
         }
+        installedCache = (apps, Date())
+        return apps
+    }
+
+    /// Finds an installed (not necessarily running) app by spoken name.
+    public static func installedAppURL(named query: String) -> URL? {
+        let q = Fuzzy.normalize(query)
+        let candidates = [aliases[q], query].compactMap { $0 }
+        let apps = installedApps()
         for c in candidates {
             if let b = Fuzzy.best(c, in: apps, name: \.0, threshold: 0.8) { return b.item.1 }
         }

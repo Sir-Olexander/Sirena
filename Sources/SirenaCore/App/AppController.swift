@@ -21,7 +21,7 @@ public final class AppController {
     let audio = AudioCapture()
     let fallback: OneShotTranscriber
     let listening: ListeningController
-    let overlayPanel: OverlayPanel
+    let overlays: OverlayController
     let menuBar: MenuBarController
     let onboarding = OnboardingWindowController()
     let vocabulary = VocabularyWindowController()
@@ -46,7 +46,7 @@ public final class AppController {
         fallback = OneShotTranscriber(client: metaClient)
         listening = ListeningController(settings: settings, overlay: overlayModel, context: context, pipeline: pipeline, dictation: dictation,
                                         transcriber: transcriber, audio: audio, fallback: fallback, history: history, numbers: numbers)
-        overlayPanel = OverlayPanel(model: overlayModel, settings: settings)
+        overlays = OverlayController(model: overlayModel, settings: settings)
         menuBar = MenuBarController(settings: settings)
 
         localClientRef = { [weak self] in self?.modelClient() }
@@ -55,11 +55,12 @@ public final class AppController {
         context.customVocabulary = { settings.customVocabulary }
         computerUse.excludedWindowIDs = { [weak self] in
             guard let self else { return [] }
-            return [self.overlayPanel.windowID] + (self.numbers.windowID.map { [$0] } ?? [])
+            return self.overlays.windowIDs + (self.numbers.windowID.map { [$0] } ?? [])
         }
         wire()
         applySettings()
-        overlayPanel.show()
+        overlays.show()
+        startFrontAppTracking()
         if key == nil || !Permissions.allRequiredGranted || !settings.onboardingDone {
             onboarding.show()
         }
@@ -103,6 +104,36 @@ public final class AppController {
                     return
                 }
             }
+        }
+    }
+
+    // MARK: - Front app and active screen
+
+    private var screenTimer: Timer?
+    private let trackingQueue = DispatchQueue(label: "ai.sirena.tracking", qos: .utility)
+
+    /// Keeps the overlay's front-app label and the "acting on this screen" marker up to date.
+    func startFrontAppTracking() {
+        let update: () -> Void = { [weak self] in
+            guard let self else { return }
+            if let app = NSWorkspace.shared.frontmostApplication, app.bundleIdentifier != Bundle.main.bundleIdentifier {
+                self.overlayModel.setFrontApp(name: app.localizedName, icon: app.icon)
+                if let bid = app.bundleIdentifier, BrowserControl.isBrowser(bid) { BrowserControl.noteBrowserUsed(bundleId: bid) }
+            }
+            self.refreshActiveScreen()
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { _ in update() }
+        // Windows move between screens without an app switch: poll the front window's screen once a second.
+        screenTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in self?.refreshActiveScreen() }
+        update()
+    }
+
+    func refreshActiveScreen() {
+        guard NSScreen.screens.count > 1 else { overlayModel.setActiveScreen(nil); return }
+        trackingQueue.async { [weak self] in
+            guard let screen = Screens.frontWindowScreen() else { return }
+            let id = Screens.id(of: screen)
+            DispatchQueue.main.async { self?.overlayModel.setActiveScreen(id) }
         }
     }
 
@@ -150,7 +181,7 @@ public final class AppController {
             self.historyWindow.show(entries: self.history.recent(100), fileURL: self.history.url)
         }
         menuBar.onPermissions = { [weak self] in self?.onboarding.show() }
-        menuBar.onResetOverlay = { [weak self] in self?.overlayPanel.resetPosition() }
+        menuBar.onResetOverlay = { [weak self] in self?.overlays.resetPositions() }
         menuBar.onSettingsChanged = { [weak self] in self?.applySettings() }
         menuBar.onPrivateModeChanged = { [weak self] on in
             guard let self else { return }
@@ -166,6 +197,8 @@ public final class AppController {
         }
         menuBar.apiKeyPresent = { [weak self] in self?.metaClient.apiKey != nil }
         menuBar.localWakeStatus = { [weak self] in self?.listening.localWakeStatus ?? "" }
+        menuBar.onNoiseReductionToggled = { [weak self] in self?.listening.applyNoiseReduction() }
+        menuBar.microphoneStatus = { [weak self] in self?.listening.microphoneDescription ?? "" }
         menuBar.onLocalWakeToggled = { [weak self] in
             guard let self else { return }
             self.listening.resetLocalWakeFailure()

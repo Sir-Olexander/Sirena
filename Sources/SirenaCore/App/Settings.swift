@@ -15,6 +15,8 @@ public final class Settings: ObservableObject {
     @Published public var localModelBaseURL: String { didSet { defaults.set(localModelBaseURL, forKey: "localModelBaseURL") } }
     @Published public var onboardingDone: Bool { didSet { defaults.set(onboardingDone, forKey: "onboardingDone") } }
     @Published public var globalShortcutEnabled: Bool { didSet { defaults.set(globalShortcutEnabled, forKey: "globalShortcutEnabled") } }
+    /// Clean the microphone with voice processing (noise suppression, echo cancellation) before recognition.
+    @Published public var noiseReduction: Bool { didSet { defaults.set(noiseReduction, forKey: "noiseReduction") } }
     /// While waiting, detect "Hey Sirena" on-device and keep audio off the network.
     @Published public var localWakeWord: Bool { didSet { defaults.set(localWakeWord, forKey: "localWakeWord") } }
 
@@ -25,6 +27,19 @@ public final class Settings: ObservableObject {
     /// Longer follow-up window while numbers are on screen, so there is time to read them.
     public var followUpWindowWithNumbers: TimeInterval = 15
 
+    /// Overlay position per screen: offset of the pill's bottom-center from the screen's origin.
+    public func overlayOffset(forScreen id: String) -> CGPoint? {
+        guard let all = defaults.dictionary(forKey: "overlayOffsets") as? [String: [Double]], let v = all[id], v.count == 2 else { return nil }
+        return CGPoint(x: v[0], y: v[1])
+    }
+
+    public func setOverlayOffset(_ p: CGPoint?, forScreen id: String) {
+        var all = defaults.dictionary(forKey: "overlayOffsets") as? [String: [Double]] ?? [:]
+        all[id] = p.map { [Double($0.x), Double($0.y)] }
+        defaults.set(all, forKey: "overlayOffsets")
+    }
+
+    /// Legacy single position (before per-screen positions).
     public var overlayPosition: CGPoint? {
         get {
             guard let arr = defaults.array(forKey: "overlayPosition") as? [Double], arr.count == 2 else { return nil }
@@ -47,5 +62,6 @@ public final class Settings: ObservableObject {
         onboardingDone = defaults.bool(forKey: "onboardingDone")
         globalShortcutEnabled = defaults.object(forKey: "globalShortcutEnabled") as? Bool ?? true
         localWakeWord = defaults.object(forKey: "localWakeWord") as? Bool ?? true
+        noiseReduction = defaults.object(forKey: "noiseReduction") as? Bool ?? true
     }
 }

@@ -2,6 +2,11 @@ import Foundation
 import AVFoundation
 
 /// Captures the microphone and delivers mono 16-bit PCM at 24 kHz in ~80 ms chunks (3840 bytes).
+///
+/// With `voiceProcessing` on (the default), Apple's voice-processing I/O cleans the signal before it reaches
+/// speech recognition: background-noise suppression, automatic gain and echo cancellation. Audio played
+/// through `playbackNode` (Sirena reading aloud) is cancelled from the microphone signal. If the device
+/// refuses voice processing, capture falls back to the plain input.
 public final class AudioCapture {
     public static let sampleRate: Double = 24_000
     public static let chunkBytes = 3840  // 80 ms at 24 kHz, 16-bit mono
@@ -12,19 +17,53 @@ public final class AudioCapture {
     public var onLevel: ((Float, Double) -> Void)?
     /// Called on an audio thread with the raw microphone buffer (native format), for on-device recognition.
     public var onBuffer: ((AVAudioPCMBuffer) -> Void)?
+    /// Called on the main thread when capture had to restart (device change) or voice processing state changed.
+    public var onStatus: ((String) -> Void)?
 
-    private let engine = AVAudioEngine()
+    /// Use voice processing (noise suppression + echo cancellation) on the next start.
+    public var voiceProcessing = true
+    public private(set) var voiceProcessingActive = false
+    /// Player attached to the capture engine when voice processing is active: its output is echo-cancelled.
+    public private(set) var playbackNode: AVAudioPlayerNode?
+    public private(set) var playbackFormat: AVAudioFormat?
+
+    private var engine = AVAudioEngine()
     private var converter: AVAudioConverter?
     private var pending = Data()
     private let outFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: AudioCapture.sampleRate, channels: 1, interleaved: true)!
     private var observer: NSObjectProtocol?
+    private var startedAt = Date.distantPast
+    private var restarts: [Date] = []
     public private(set) var isRunning = false
+    public private(set) var inputDescription = ""
 
     public init() {}
 
     public func start() throws {
         guard !isRunning else { return }
+        if voiceProcessing {
+            do {
+                try startEngine(withVoiceProcessing: true)
+                return
+            } catch {
+                Log.speech.error("voice processing unavailable (\(error.localizedDescription, privacy: .public)); using the plain microphone")
+                teardown()
+            }
+        }
+        try startEngine(withVoiceProcessing: false)
+    }
+
+    private func startEngine(withVoiceProcessing vp: Bool) throws {
+        engine = AVAudioEngine()
         let input = engine.inputNode
+        voiceProcessingActive = false
+        if vp {
+            try input.setVoiceProcessingEnabled(true)
+            // Do not turn other apps (music, calls) down while Sirena listens.
+            input.voiceProcessingOtherAudioDuckingConfiguration = AVAudioVoiceProcessingOtherAudioDuckingConfiguration(enableAdvancedDucking: false, duckingLevel: .min)
+            input.isVoiceProcessingAGCEnabled = true
+            voiceProcessingActive = true
+        }
         let inFormat = input.outputFormat(forBus: 0)
         guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else {
             throw NSError(domain: "Sirena.Audio", code: 1, userInfo: [NSLocalizedDescriptionKey: "No microphone input available"])
@@ -32,36 +71,76 @@ public final class AudioCapture {
         guard let conv = AVAudioConverter(from: inFormat, to: outFormat) else {
             throw NSError(domain: "Sirena.Audio", code: 2, userInfo: [NSLocalizedDescriptionKey: "Cannot convert microphone format"])
         }
+        conv.downmix = true
         converter = conv
         pending.removeAll()
+        if vp {
+            // Playback through the same voice-processing unit is removed from the microphone signal.
+            let player = AVAudioPlayerNode()
+            engine.attach(player)
+            let rate = engine.outputNode.outputFormat(forBus: 0).sampleRate
+            let fmt = AVAudioFormat(standardFormatWithSampleRate: rate > 0 ? rate : 48_000, channels: 1)!
+            engine.connect(player, to: engine.mainMixerNode, format: fmt)
+            playbackNode = player
+            playbackFormat = fmt
+        } else {
+            playbackNode = nil
+            playbackFormat = nil
+        }
         input.installTap(onBus: 0, bufferSize: 2048, format: inFormat) { [weak self] buffer, _ in
             self?.process(buffer)
         }
         engine.prepare()
-        try engine.start()
+        do {
+            try engine.start()
+        } catch {
+            input.removeTap(onBus: 0)
+            throw error
+        }
         isRunning = true
-        observer = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { [weak self] _ in
+        startedAt = Date()
+        inputDescription = "\(Int(inFormat.sampleRate)) Hz, \(inFormat.channelCount) ch\(vp ? ", noise reduction on" : "")"
+        observer = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
             self?.restartAfterConfigChange()
         }
-        Log.speech.info("audio capture started: \(inFormat.sampleRate, privacy: .public) Hz, \(inFormat.channelCount, privacy: .public) ch")
+        Log.speech.notice("audio capture started: \(self.inputDescription, privacy: .public)")
     }
 
     public func stop() {
         guard isRunning else { return }
+        teardown()
+        Log.speech.notice("audio capture stopped")
+    }
+
+    private func teardown() {
         if let o = observer { NotificationCenter.default.removeObserver(o); observer = nil }
         engine.inputNode.removeTap(onBus: 0)
+        playbackNode?.stop()
         engine.stop()
+        if voiceProcessingActive { try? engine.inputNode.setVoiceProcessingEnabled(false) }
+        playbackNode = nil
+        playbackFormat = nil
+        voiceProcessingActive = false
         isRunning = false
-        Log.speech.info("audio capture stopped")
     }
 
     private func restartAfterConfigChange() {
+        // Voice processing reconfigures the device right after starting; ignore that, and never loop.
+        guard isRunning, Date().timeIntervalSince(startedAt) > 1.5 else { return }
+        restarts = restarts.filter { Date().timeIntervalSince($0) < 60 } + [Date()]
+        if restarts.count > 3 {
+            Log.speech.error("audio configuration keeps changing; restarting without voice processing")
+            voiceProcessing = false
+        }
         Log.speech.notice("audio configuration changed, restarting capture")
-        let wasRunning = isRunning
-        stop()
-        if wasRunning {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                try? self?.start()
+        teardown()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self else { return }
+            do {
+                try self.start()
+                self.onStatus?("Microphone changed: \(self.inputDescription)")
+            } catch {
+                self.onStatus?("Microphone error: \(error.localizedDescription)")
             }
         }
     }

@@ -27,6 +27,18 @@ public final class OverlayModel: ObservableObject {
     @Published public private(set) var connectionNote: String? = nil
     /// Waiting with the on-device wake word: no audio leaves the Mac.
     @Published public private(set) var privateListening = false
+    /// Reading aloud.
+    @Published public private(set) var readingState: ReadAloud.State = .idle
+    @Published public private(set) var readingTitle: String? = nil
+    @Published public private(set) var readingProgress: Double = 0
+    /// The app Sirena is acting on.
+    @Published public private(set) var frontAppName: String? = nil
+    @Published public private(set) var frontAppIcon: NSImage? = nil
+    /// Screen holding the front window (marked on that screen's copy of the overlay).
+    @Published public private(set) var activeScreenID: String? = nil
+    @Published public private(set) var screenCount = 1
+    /// Second line of the confirmation card (e.g. the safety warning behind the question).
+    @Published public private(set) var confirmDetail: String? = nil
     /// True while the pill is expanded after recent activity.
     @Published public private(set) var isActive = false
     /// Frames of the Yes / Cancel areas in the overlay's coordinate space (set by the view, read by the panel).
@@ -56,6 +68,15 @@ public final class OverlayModel: ObservableObject {
     public func setConnection(_ note: String?) { onMain { self.connectionNote = note; if note != nil { self.touch() } } }
     public func setLatency(_ l: LatencyReport?) { onMain { self.latency = l } }
     public func setPrivateListening(_ p: Bool) { onMain { self.privateListening = p } }
+    public func setFrontApp(name: String?, icon: NSImage?) {
+        onMain { if self.frontAppName != name { self.frontAppName = name; self.frontAppIcon = icon } }
+    }
+    public func setActiveScreen(_ id: String?) { onMain { if self.activeScreenID != id { self.activeScreenID = id } } }
+    public func setScreenCount(_ n: Int) { onMain { self.screenCount = n } }
+
+    public func setReading(_ state: ReadAloud.State, title: String?, progress: Double) {
+        onMain { self.readingState = state; self.readingTitle = title; self.readingProgress = progress; self.touch() }
+    }
 
     public func pushLevel(_ v: Float) {
         levelThrottle += 1
@@ -74,7 +95,10 @@ public final class OverlayModel: ObservableObject {
         }
     }
     public func showError(_ text: String, autoClear: TimeInterval = 5) { setMode(.error(text), autoClear: autoClear) }
-    public func showConfirm(_ message: String) { setMode(.confirm(message), autoClear: nil) }
+    public func showConfirm(_ message: String, detail: String? = nil) {
+        onMain { self.confirmDetail = detail }
+        setMode(.confirm(message), autoClear: nil)
+    }
     public func clearMode() { setMode(.idle, autoClear: nil) }
 
     private func setMode(_ m: OverlayMode, autoClear: TimeInterval?) {
@@ -98,7 +122,7 @@ public final class OverlayModel: ObservableObject {
         activityTimer = Timer.scheduledTimer(withTimeInterval: 4, repeats: false) { [weak self] _ in
             guard let self else { return }
             if case .confirm = self.mode { return }
-            if self.isSpeaking || !self.partialText.isEmpty { self.touch(); return }
+            if self.isSpeaking || !self.partialText.isEmpty || self.readingState != .idle { self.touch(); return }
             self.isActive = false
         }
     }

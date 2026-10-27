@@ -22,6 +22,8 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
     public var apiKeyPresent: () -> Bool = { false }
     public var localWakeStatus: () -> String = { "" }
     public var onLocalWakeToggled: (() -> Void)?
+    public var onNoiseReductionToggled: (() -> Void)?
+    public var microphoneStatus: () -> String = { "" }
 
     public init(settings: Settings) {
         self.settings = settings
@@ -80,6 +82,16 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         let ptt = item("Push-to-talk (hold ⌥ right = dictate, ⌘ right = command)", #selector(togglePTT), key: "")
         ptt.state = settings.pushToTalk ? .on : .off
         menu.addItem(ptt)
+        let nr = item("Reduce background noise", #selector(toggleNoise), key: "")
+        nr.state = settings.noiseReduction ? .on : .off
+        nr.toolTip = "Apple voice processing: noise suppression and echo cancellation before speech recognition."
+        menu.addItem(nr)
+        let mic = microphoneStatus()
+        if !mic.isEmpty {
+            let m = NSMenuItem(title: "   Microphone: \(mic)", action: nil, keyEquivalent: "")
+            m.isEnabled = false
+            menu.addItem(m)
+        }
         let lw = item("On-device wake word while waiting (no audio leaves the Mac)", #selector(toggleLocalWake), key: "")
         lw.state = settings.localWakeWord ? .on : .off
         lw.toolTip = "Uses Apple's on-device speech recognition to hear “Hey Sirena”; real audio is streamed to Meta only once she is awake. Needs Dictation turned on in System Settings → Keyboard."
@@ -143,6 +155,7 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func togglePrivate() { settings.privateMode.toggle(); onPrivateModeChanged?(settings.privateMode) }
     @objc private func togglePTT() { settings.pushToTalk.toggle(); onSettingsChanged?() }
     @objc private func toggleRaw() { settings.rawDictation.toggle(); onSettingsChanged?() }
+    @objc private func toggleNoise() { settings.noiseReduction.toggle(); onNoiseReductionToggled?(); onSettingsChanged?() }
     @objc private func toggleLocalWake() { settings.localWakeWord.toggle(); onLocalWakeToggled?(); onSettingsChanged?() }
     @objc private func toggleLatency() { settings.showLatency.toggle(); onSettingsChanged?() }
     @objc private func toggleLarge() { settings.largeOverlay.toggle(); onSettingsChanged?() }

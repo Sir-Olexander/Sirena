@@ -111,6 +111,21 @@ final class RouterTests: XCTestCase {
         XCTAssertEqual(folded.last, .confirmThen(message: "Send?", actions: [.pressReturnToSend]))
     }
 
+    func testWebsitesAndConfirmations() {
+        XCTAssertEqual(Websites.url(for: "google")?.host, "www.google.com")
+        XCTAssertEqual(Websites.url(for: "YouTube")?.host, "www.youtube.com")
+        XCTAssertEqual(Websites.url(for: "gmail")?.host, "mail.google.com")
+        XCTAssertEqual(Websites.url(for: "github dot com")?.host, "github.com")
+        XCTAssertNil(Websites.url(for: "notes"))
+        let q = ConfirmationText.question("Send this message?", before: [.switchTo("WhatsApp"), .typeText("hello")], after: [.pressReturnToSend], appName: nil)
+        XCTAssertEqual(q, "Send “hello” in WhatsApp?")
+        let q2 = ConfirmationText.question("Confirm?", before: [], after: [.clickElement("Send")], appName: "WhatsApp")
+        XCTAssertEqual(q2, "Click “Send” in WhatsApp?")
+        XCTAssertTrue(Action.irreversibleLabel("Chamada de voz"))
+        XCTAssertTrue(Action.irreversibleLabel("Send message"))
+        XCTAssertFalse(Action.irreversibleLabel("Search"))
+    }
+
     func testLocalCleanup() {
         XCTAssertEqual(DictationEngine.localCleanup("um so basically the meeting is moved to friday"), "The meeting is moved to friday.")
     }

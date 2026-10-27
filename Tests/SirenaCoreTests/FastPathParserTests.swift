@@ -19,8 +19,11 @@ final class FastPathParserTests: XCTestCase {
     func testAppSwitching() {
         XCTAssertEqual(parse("switch to Chrome"), [.switchTo("chrome")])
         XCTAssertEqual(parse("Switch to the Google page."), [.switchTo("google")])
-        XCTAssertEqual(parse("open Notes"), [.switchTo("notes")])
-        XCTAssertEqual(parse("go to Slack please"), [.switchTo("slack")])
+        XCTAssertEqual(parse("open Notes"), [.open("notes")])
+        XCTAssertEqual(parse("go to Slack please"), [.open("slack")])
+        XCTAssertEqual(parse("open Google"), [.open("google")])
+        XCTAssertEqual(parse("open Google app"), [.open("google app")])
+        XCTAssertEqual(parse("Google app"), [.open("google app")])
         XCTAssertEqual(parse("switch to Claude"), [.switchTo("claude")])
     }
 
@@ -64,6 +67,7 @@ final class FastPathParserTests: XCTestCase {
         XCTAssertTrue(actions?.contains(.typeText("summarize the page I just read")) ?? false)
         if case .confirmThen(let msg, let inner)? = actions?.last {
             XCTAssertTrue(msg.contains("Claude"))
+            XCTAssertTrue(msg.contains("summarize the page I just read"))
             XCTAssertEqual(inner, [.pressReturnToSend])
         } else {
             XCTFail("expected a confirmation step, got \(String(describing: actions))")
@@ -102,6 +106,37 @@ final class FastPathParserTests: XCTestCase {
         XCTAssertEqual(parse("click save and continue"), [.clickElement("save and continue")])
         XCTAssertEqual(parse("type see you then"), [.typeText("see you then")])
         XCTAssertNil(parse("switch to Chrome go to the first tab"))
+    }
+
+    func testScreens() {
+        XCTAssertEqual(parse("move this window to the other screen"), [.moveWindowToScreen(.other)])
+        XCTAssertEqual(parse("move it to the left monitor"), [.moveWindowToScreen(.left)])
+        XCTAssertEqual(parse("move the window to screen 2"), [.moveWindowToScreen(.index(2))])
+        XCTAssertEqual(parse("switch to the other screen"), [.focusScreen(.other)])
+        XCTAssertEqual(parse("Switch to the second monitor"), [.focusScreen(.index(2))])
+        XCTAssertEqual(parse("focus the right display"), [.focusScreen(.right)])
+        XCTAssertEqual(parse("go to screen one"), [.focusScreen(.index(1))])
+        XCTAssertEqual(parse("switch screens"), [.focusScreen(.other)])
+    }
+
+    func testEditText() {
+        XCTAssertEqual(parse("make that a list"), [.editText("make that a list")])
+        XCTAssertEqual(parse("separate the points with two line breaks"), [.editText("separate the points with two line breaks")])
+        XCTAssertEqual(parse("separate each point with two line breaks."), [.editText("separate each point with two line breaks")])
+        XCTAssertEqual(parse("fix the grammar"), [.editText("fix the grammar")])
+        XCTAssertEqual(parse("make it bigger"), [.zoomWindow])
+        XCTAssertEqual(parse("turn it up"), [.mediaKey("volumeup")])
+        XCTAssertNotEqual(parse("make it full screen")?.first, .editText("make it full screen"))
+    }
+
+    func testNotesAndControls() {
+        XCTAssertEqual(parse("note buy milk and eggs"), [.saveNote("buy milk and eggs")])
+        XCTAssertEqual(parse("take a note: call the bank tomorrow"), [.saveNote("call the bank tomorrow")])
+        XCTAssertEqual(parse("forget that"), [.forgetLearnedShortcut])
+        XCTAssertEqual(parse("show my notes"), [.openNotesWindow])
+        XCTAssertEqual(parse("read the article"), [.readArticle])
+        XCTAssertEqual(parse("read this"), [.readSelection])
+        XCTAssertEqual(parse("read the page"), [.readPage])
     }
 
     func testUnknownFallsThrough() {

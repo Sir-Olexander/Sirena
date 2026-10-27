@@ -63,11 +63,31 @@ public indirect enum Action: Equatable, Codable {
     case say(String)
     case computerUse(goal: String)
     case pause(ms: Int)
+    // Reading aloud
+    case readSelection, readArticle, readPage
+    case readingControl(ReadingControl)
+    /// "open X": an exact app name (or "X app") opens the app; a website name opens the site in the front browser.
+    case open(String)
+    // Screens
+    case moveWindowToScreen(ScreenTarget)
+    case focusScreen(ScreenTarget)
+    /// Rewrite / reformat the text just dictated (or the selection / focused field) following an instruction.
+    case editText(String)
+    /// Choose a menu bar item by path, e.g. "File > New Note".
+    case selectMenu(String)
+    // Notes, snippets, shortcuts
+    case saveNote(String)
+    case insertSnippet(String)
+    case runAppleShortcut(String)
+    case forgetLearnedShortcut
+    case openNotesWindow, openShortcutsWindow, openHistoryWindow
 
     /// Control actions are handled by the listening controller, not the executor.
     public var isControl: Bool {
         switch self {
-        case .wait, .turnOff, .startDictation, .stopDictation, .showNumbers, .hideNumbers, .undo, .cancel, .newLine, .deleteLastChunk, .say:
+        case .wait, .turnOff, .startDictation, .stopDictation, .showNumbers, .hideNumbers, .undo, .cancel, .newLine, .deleteLastChunk, .say,
+             .readSelection, .readArticle, .readPage, .readingControl, .forgetLearnedShortcut,
+             .openNotesWindow, .openShortcutsWindow, .openHistoryWindow:
             return true
         default:
             return false
@@ -79,8 +99,15 @@ public indirect enum Action: Equatable, Codable {
         switch self {
         case .pressReturnToSend: return true
         case .confirmThen: return true
+        case .clickElement(let label): return Action.irreversibleLabel(label)
+        case .selectMenu(let path): return Action.irreversibleLabel(path)
         default: return false
         }
+    }
+
+    /// Labels of buttons that send, call, delete, buy or submit (English and Portuguese).
+    public static func irreversibleLabel(_ label: String) -> Bool {
+        WakeWord.normalize(label).firstMatch("\\b(send|enviar|envia|call|ligar|liga|chamada|chamar|video call|voice call|dial|delete|apagar|eliminar|remove|remover|erase|trash|lixo|discard|descartar|buy|comprar|purchase|pay|pagar|order|encomendar|checkout|submit|submeter|publish|publicar|post|tweet|transfer|transferir|book now|reservar|sign out|terminar sess[aã]o|unsubscribe|empty trash|quit without saving|don't save|nao guardar|não guardar)\\b") != nil
     }
 
     public var shortDescription: String {
@@ -131,6 +158,22 @@ public indirect enum Action: Equatable, Codable {
         case .say(let s): return s
         case .computerUse(let g): return "Looking at the screen… \(g)"
         case .pause: return ""
+        case .readSelection: return "Reading the selection"
+        case .readArticle: return "Reading the article"
+        case .readPage: return "Reading the page"
+        case .readingControl(let c): return "Reading: \(c.rawValue)"
+        case .open(let s): return "Opening \(s)"
+        case .moveWindowToScreen(let t): return "Moving the window to \(t.spoken)"
+        case .focusScreen(let t): return "Switching to \(t.spoken)"
+        case .editText(let i): return "Editing: \(i.prefix(40))"
+        case .selectMenu(let m): return "Menu \(m)"
+        case .saveNote: return "Saving a note"
+        case .insertSnippet(let n): return "Inserting “\(n)”"
+        case .runAppleShortcut(let n): return "Running the shortcut “\(n)”"
+        case .forgetLearnedShortcut: return "Forgetting that shortcut"
+        case .openNotesWindow: return "Notes & snippets"
+        case .openShortcutsWindow: return "Shortcut book"
+        case .openHistoryWindow: return "Command history"
         }
     }
 }

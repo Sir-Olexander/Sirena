@@ -132,9 +132,46 @@ public enum BrowserControl {
         }
     }
 
+    // MARK: - Which browser gets new pages
+
+    private static var lastUsedBrowserBundleId: String?
+
+    /// Called whenever a browser becomes the front app.
+    public static func noteBrowserUsed(bundleId: String) { lastUsedBrowserBundleId = bundleId }
+
+    /// The browser that should receive a web search or a website: the browser in front, else the browser
+    /// used last, else the default browser.
+    public static func targetBrowserURL() -> URL? {
+        if let front = NSWorkspace.shared.frontmostApplication, let bid = front.bundleIdentifier, isBrowser(bid), let url = front.bundleURL {
+            return url
+        }
+        if let bid = lastUsedBrowserBundleId {
+            if let running = NSRunningApplication.runningApplications(withBundleIdentifier: bid).first, let url = running.bundleURL { return url }
+            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bid) { return url }
+        }
+        return NSWorkspace.shared.urlForApplication(toOpen: URL(string: "https://example.com")!)
+    }
+
+    /// Opens a web page in the target browser (a new tab of its front window).
+    public static func openInTargetBrowser(_ url: URL) -> String {
+        let browserURL = targetBrowserURL()
+        let name = browserURL?.deletingPathExtension().lastPathComponent ?? "the browser"
+        DispatchQueue.main.async {
+            let cfg = NSWorkspace.OpenConfiguration()
+            cfg.activates = true
+            if let b = browserURL {
+                NSWorkspace.shared.open([url], withApplicationAt: b, configuration: cfg)
+            } else {
+                NSWorkspace.shared.open(url)
+            }
+        }
+        return name
+    }
+
     /// The default browser's running AppInfo, or any running browser.
     public static func preferredRunningBrowser(apps: [AppInfo]) -> AppInfo? {
         if let front = RunningApps.frontmost(), isBrowser(front.bundleId) { return front }
+        if let bid = lastUsedBrowserBundleId, let app = apps.first(where: { $0.bundleId == bid }) { return app }
         if let url = NSWorkspace.shared.urlForApplication(toOpen: URL(string: "https://example.com")!),
            let bid = Bundle(url: url)?.bundleIdentifier, let app = apps.first(where: { $0.bundleId == bid }) { return app }
         return apps.first { isBrowser($0.bundleId) }

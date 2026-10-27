@@ -47,6 +47,10 @@ public final class ActionExecutor {
     private var undoStack: [UndoRecord] = []
     /// Handles `.computerUse` (set by the pipeline).
     public var computerUseHandler: ((String) async throws -> String)?
+    /// Handles `.editText` (set by the app: model rewrite of the dictated text).
+    public var textEditHandler: ((String) async throws -> String)?
+    /// Name of the app actions run in, for confirmation messages.
+    public var appNameForConfirmations: () -> String? = { RunningApps.frontmost()?.name }
     /// Dry run: log what would happen instead of touching the Mac (used by `sirena-cli simulate`).
     public var dryRun = false
 
@@ -55,17 +59,48 @@ public final class ActionExecutor {
     }
 
     public func execute(_ actions: [Action], snapshot: ScreenSnapshot?) async throws -> ExecutionResult {
-        // Computer use is async; everything else is synchronous on the executor queue.
-        if actions.count == 1, case .computerUse(let goal) = actions[0] {
-            guard let handler = computerUseHandler else { throw ExecutionError.failed("Screen fallback unavailable") }
-            let summary = try await handler(goal)
-            return ExecutionResult(summary: summary)
-        }
-        return try await withCheckedThrowingContinuation { cont in
-            queue.async {
-                do { cont.resume(returning: try self.run(actions, snapshot: snapshot)) }
-                catch { cont.resume(throwing: error) }
+        // Model-backed actions (screen fallback, text edits) run asynchronously; runs of direct actions in between
+        // run synchronously on the executor queue. A confirmation stops the run and returns the rest as pending.
+        var summaries: [String] = []
+        var snap = snapshot
+        var i = 0
+        while i < actions.count {
+            switch actions[i] {
+            case .computerUse(let goal):
+                guard let handler = computerUseHandler else { throw ExecutionError.failed("Screen fallback unavailable") }
+                summaries.append(try await handler(goal))
+                snap = nil
+                i += 1
+            case .editText(let instruction):
+                guard let handler = textEditHandler else { throw ExecutionError.failed("Text editing unavailable") }
+                if dryRun { print("   [dry run] editText(\(instruction))"); summaries.append("Edited"); i += 1; continue }
+                summaries.append(try await handler(instruction))
+                undoStack.append(.generic)
+                i += 1
+            default:
+                var j = i
+                while j < actions.count, !ActionExecutor.isAsync(actions[j]) { j += 1 }
+                let batch = Array(actions[i..<j])
+                let start = snap
+                let result: ExecutionResult = try await withCheckedThrowingContinuation { cont in
+                    queue.async {
+                        do { cont.resume(returning: try self.run(batch, snapshot: start, rest: Array(actions[j...]), done: summaries)) }
+                        catch { cont.resume(throwing: error) }
+                    }
+                }
+                if result.pendingConfirmation != nil { return result }
+                summaries = result.summary.isEmpty ? summaries : result.summary.components(separatedBy: " → ")
+                snap = nil
+                i = j
             }
+        }
+        return ExecutionResult(summary: summaries.filter { !$0.isEmpty }.joined(separator: " → "))
+    }
+
+    static func isAsync(_ a: Action) -> Bool {
+        switch a {
+        case .computerUse, .editText: return true
+        default: return false
         }
     }
 
@@ -77,13 +112,14 @@ public final class ActionExecutor {
 
     // MARK: - Synchronous execution
 
-    private func run(_ actions: [Action], snapshot: ScreenSnapshot?) throws -> ExecutionResult {
+    private func run(_ actions: [Action], snapshot: ScreenSnapshot?, rest: [Action], done: [String]) throws -> ExecutionResult {
         var snap = snapshot ?? context.snapshot(includeElements: false)
-        var summaries: [String] = []
+        var summaries: [String] = done
         for (i, action) in actions.enumerated() {
             if case .confirmThen(let message, let inner) = action {
-                let rest = inner + Array(actions.dropFirst(i + 1))
-                return ExecutionResult(summary: summaries.joined(separator: " → "), pendingConfirmation: PendingConfirmation(message: message, actions: rest))
+                let remaining = inner + Array(actions.dropFirst(i + 1)) + rest
+                let question = ConfirmationText.question(message, before: Array(actions.prefix(i)), after: remaining, appName: appNameForConfirmations())
+                return ExecutionResult(summary: summaries.joined(separator: " → "), pendingConfirmation: PendingConfirmation(message: question, actions: remaining))
             }
             let s = try perform(action, snapshot: &snap)
             if !s.isEmpty { summaries.append(s) }
@@ -138,15 +174,44 @@ public final class ActionExecutor {
         case .goForward:
             Keyboard.press(KeyCombo("]", [.command])); return "Forward"
         case .openURL(let raw):
-            let url = ActionExecutor.normalizeURL(raw)
-            guard let u = URL(string: url) else { throw ExecutionError.failed("Bad URL") }
-            DispatchQueue.main.async { NSWorkspace.shared.open(u) }
-            return "Opening \(u.host ?? url)"
+            guard let u = Websites.url(for: raw) ?? URL(string: ActionExecutor.normalizeURL(raw)) else { throw ExecutionError.failed("Bad URL") }
+            return openWebsite(u, snapshot: &snap)
         case .webSearch(let q):
             var comps = URLComponents(string: "https://www.google.com/search")!
             comps.queryItems = [URLQueryItem(name: "q", value: q)]
-            if let u = comps.url { DispatchQueue.main.async { NSWorkspace.shared.open(u) } }
-            return "Searching “\(q)”"
+            guard let u = comps.url else { throw ExecutionError.failed("Bad search") }
+            let browser = BrowserControl.openInTargetBrowser(u)
+            return "Searching “\(q)” in \(browser)"
+        case .open(let target):
+            return try open(target, snapshot: &snap)
+        case .moveWindowToScreen(let target):
+            let s = try Screens.moveFrontWindow(to: target)
+            undoStack.append(.generic)
+            return s
+        case .focusScreen(let target):
+            let previous = snap.frontApp
+            let s = try Screens.focus(target)
+            undoStack.append(.appSwitched(previous: previous))
+            return s
+        case .selectMenu(let path):
+            return try selectMenu(path, snapshot: snap)
+        case .saveNote(let text):
+            let window = snap.frontApp.flatMap { AX.frontWindow(pid: $0.pid)?.title }
+            NotesStore.shared.addNote(text, app: snap.frontApp?.name, windowTitle: window)
+            return "Noted ✓"
+        case .insertSnippet(let name):
+            guard let sn = NotesStore.shared.snippet(named: name) else { throw ExecutionError.unresolved(name) }
+            inserter.insert(sn.text)
+            undoStack.append(.textInserted)
+            NotesStore.shared.noteSnippetUsed(sn.id)
+            usleep(120_000)
+            return "Inserted “\(sn.name)”"
+        case .runAppleShortcut(let name):
+            guard let real = AppleShortcuts.match(name) else { throw ExecutionError.unresolved(name) }
+            let out = try AppleShortcuts.runShortcut(real)
+            return out.isEmpty ? "Ran “\(real)”" : "“\(real)”: \(out.prefix(60))"
+        case .editText:
+            throw ExecutionError.failed("Text edits run asynchronously")
         case .scroll(let dir, let amount):
             scroll(dir, amount, snapshot: snap)
             return "Scrolled \(dir.rawValue)"
@@ -192,7 +257,9 @@ public final class ActionExecutor {
             return s
         case .computerUse(let goal):
             throw ExecutionError.needsScreen(goal)
-        case .wait, .turnOff, .startDictation, .stopDictation, .showNumbers, .hideNumbers, .undo, .cancel, .newLine, .deleteLastChunk:
+        case .wait, .turnOff, .startDictation, .stopDictation, .showNumbers, .hideNumbers, .undo, .cancel, .newLine, .deleteLastChunk,
+             .readSelection, .readArticle, .readPage, .readingControl, .forgetLearnedShortcut,
+             .openNotesWindow, .openShortcutsWindow, .openHistoryWindow:
             return ""   // control actions are handled by the listening controller
         }
     }
@@ -215,6 +282,59 @@ public final class ActionExecutor {
         snap = context.snapshot(includeElements: false, includeBrowser: false)
         numbers.frontAppChanged(pid: app.pid)
         return "Switched to \(app.name)"
+    }
+
+    /// "open X": an exact app name (or "X app") → the app; a website name → the site in the front browser;
+    /// otherwise the same resolution as "switch to X".
+    private func open(_ raw: String, snapshot snap: inout ScreenSnapshot) throws -> String {
+        var target = raw.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        var wantsApp = false
+        if let m = WakeWord.normalize(target).firstMatch("^(.+?)\\s+(?:app|application)$") { target = m[1]; wantsApp = true }
+        if let app = RunningApps.exactMatch(target, in: snap.apps) { return activate(app, snapshot: &snap) }
+        if let url = RunningApps.installedAppURL(exactly: target) {
+            RunningApps.launch(url: url)
+            return "Opening \(url.deletingPathExtension().lastPathComponent)"
+        }
+        if wantsApp { return try switchTo(target, snapshot: &snap) }
+        if let url = Websites.url(for: target) { return openWebsite(url, snapshot: &snap) }
+        return try switchTo(target, snapshot: &snap)
+    }
+
+    /// Opens a site in the front browser (or the browser used last); reuses a tab already showing that site.
+    private func openWebsite(_ url: URL, snapshot snap: inout ScreenSnapshot) -> String {
+        let host = Websites.host(of: url)
+        if let browserURL = BrowserControl.targetBrowserURL(),
+           let running = snap.apps.first(where: { $0.app.bundleURL == browserURL }),
+           let info = context.browserInfo(for: running),
+           let tab = info.tabs.first(where: { (URL(string: $0.url).map(Websites.host(of:)) ?? "") == host && url.path.count <= 1 }) {
+            if snap.frontApp?.pid != running.pid { _ = activate(running, snapshot: &snap) }
+            BrowserControl.activateTab(index: tab.index, in: info)
+            undoStack.append(.tabSwitched(browser: info, previousIndex: info.activeIndex))
+            return "\(running.name) → tab \(tab.index) “\(tab.title.prefix(30))”"
+        }
+        let browser = BrowserControl.openInTargetBrowser(url)
+        return "Opening \(host) in \(browser)"
+    }
+
+    /// Chooses a menu bar item by path ("File > New Note"), matching titles loosely.
+    private func selectMenu(_ path: String, snapshot snap: ScreenSnapshot) throws -> String {
+        guard let app = snap.frontApp, let bar = AXElement.application(pid: app.pid).element(kAXMenuBarAttribute) else {
+            throw ExecutionError.failed("No menu bar")
+        }
+        let parts = path.components(separatedBy: CharacterSet(charactersIn: ">›→")).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard !parts.isEmpty else { throw ExecutionError.failed("Empty menu path") }
+        var container = bar
+        for (i, part) in parts.enumerated() {
+            let items = i == 0 ? container.children : (container.children.first { $0.role == "AXMenu" }?.children ?? container.children)
+            guard let item = Fuzzy.best(part, in: items, name: { $0.title ?? "" }, threshold: 0.7)?.item else {
+                if i > 0 { Keyboard.press(KeyCombo("escape")) }
+                throw ExecutionError.elementNotFound(part)
+            }
+            item.perform(kAXPressAction)
+            usleep(120_000)
+            container = item
+        }
+        return "Chose \(parts.joined(separator: " › "))"
     }
 
     private func switchTo(_ target: String, snapshot snap: inout ScreenSnapshot) throws -> String {
@@ -244,7 +364,9 @@ public final class ActionExecutor {
                 return "\(app.name) → “\(best.item.prefix(30))”"
             }
         }
-        // 4. an installed app
+        // 4. a website by name ("switch to YouTube" with no YouTube tab open)
+        if let url = Websites.url(for: target) { return openWebsite(url, snapshot: &snap) }
+        // 5. an installed app
         if let url = RunningApps.installedAppURL(named: target) {
             RunningApps.launch(url: url)
             return "Opening \(url.deletingPathExtension().lastPathComponent)"

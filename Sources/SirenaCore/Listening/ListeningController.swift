@@ -30,6 +30,8 @@ public final class ListeningController {
     public private(set) var localWakeFailure: String?
     public var onLocalWakeStatusChange: (() -> Void)?
     private var wokeAt = Date.distantPast
+    /// Reads text aloud; its voice is filtered out of what Sirena hears.
+    public let reader = ReadAloud()
 
     private var followUpUntil: Date?
     private var followUpTimer: Timer?
@@ -98,6 +100,16 @@ public final class ListeningController {
             }
             self.onLocalWakeStatusChange?()
         }
+        reader.playbackProvider = { [weak audio] in
+            guard let audio, audio.isRunning, let node = audio.playbackNode, let fmt = audio.playbackFormat else { return nil }
+            return (node, fmt)
+        }
+        reader.onChange = { [weak self] state, title, progress in
+            guard let self else { return }
+            self.overlay.setReading(state, title: title, progress: progress)
+            if state == .idle { self.openFollowUpWindow() }
+        }
+        audio.onStatus = { [weak self] message in self?.overlay.showMessage(message, autoClear: 3) }
         pipeline.onControl = { [weak self] a in self?.handleControl(a) }
         pipeline.fastPathContext = { [weak self] in
             guard let self else { return .init() }
@@ -131,6 +143,22 @@ public final class ListeningController {
         case .awake: turnOff()
         }
     }
+
+    /// Apply the noise-reduction setting: restart the microphone if it is running.
+    public func applyNoiseReduction() {
+        audio.voiceProcessing = settings.noiseReduction
+        guard audio.isRunning, !simulateInput else { return }
+        reader.stop()
+        audio.stop()
+        do {
+            try audio.start()
+            overlay.showMessage(audio.voiceProcessingActive ? "Noise reduction on" : (settings.noiseReduction ? "Noise reduction unavailable on this microphone" : "Noise reduction off"), autoClear: 2.5)
+        } catch {
+            overlay.showError("Microphone: \(error.localizedDescription)")
+        }
+    }
+
+    public var microphoneDescription: String { audio.isRunning ? audio.inputDescription : "" }
 
     /// Result of the launch-time probe of on-device recognition.
     public func noteLocalWakeProbe(works: Bool, reason: String?) {
@@ -171,6 +199,7 @@ public final class ListeningController {
                 return
             }
             do {
+                self.audio.voiceProcessing = self.settings.noiseReduction
                 try self.audio.start()
             } catch {
                 self.overlay.showError("Microphone: \(error.localizedDescription)")
@@ -190,6 +219,7 @@ public final class ListeningController {
 
     public func turnOff() {
         guard state != .off else { return }
+        reader.stop()
         stopLocalWake(replay: false)
         if !simulateInput { audio.stop(); transcriber.stop() }
         fallback?.reset()
@@ -344,8 +374,14 @@ public final class ListeningController {
     }
 
     private func route(_ text: String, asrMs: Int?) {
+        // Sirena hearing herself read: never act on it.
+        if reader.recentlyActive, reader.isLikelyEcho(text) {
+            history.append(HistoryEntry(utterance: text, route: "ignored (own voice)", latency: LatencyReport(asrMs: asrMs)))
+            return
+        }
         let ctx = RouterContext(state: state, isDictating: isDictating, hasPendingConfirmation: pipeline.hasPendingConfirmation,
-                                inFollowUpWindow: inFollowUpWindow, numbersVisible: numbers.isVisible, pushToTalk: pushToTalkKey)
+                                inFollowUpWindow: inFollowUpWindow, numbersVisible: numbers.isVisible, pushToTalk: pushToTalkKey,
+                                isReading: reader.isActive)
         let decision = UtteranceRouter.route(text, context: ctx)
         Log.listening.info("utterance \"\(text, privacy: .public)\" → \(String(describing: decision), privacy: .public)")
         if state == .awake { resetIdleTimer() }
@@ -392,8 +428,10 @@ public final class ListeningController {
                 }
                 self.history.append(HistoryEntry(utterance: dictated, route: "dictation", layer: latency.layer, action: "insert", result: res.inserted, latency: latency))
             }
-        case .reading:
-            break
+        case .reading(let control):
+            reader.control(control)
+            history.append(HistoryEntry(utterance: text, route: "control", layer: "fast", action: "reading \(control.rawValue)", result: "ok",
+                                        latency: LatencyReport(asrMs: asrMs), command: WakeWord.stripLeadingName(text) ?? text, actions: [.readingControl(control)]))
         case .ignore(let why):
             history.append(HistoryEntry(utterance: text, route: "ignored (\(why))", latency: LatencyReport(asrMs: asrMs)))
             if state == .awake, !isDictating, why == "no name" {
@@ -452,8 +490,44 @@ public final class ListeningController {
             enqueueDictation { [dictation] in dictation.deleteLast() }
         case .say(let s):
             overlay.showMessage(s, autoClear: 6)
+        case .readSelection, .readArticle, .readPage:
+            startReading(action)
+        case .readingControl(let c):
+            if reader.isActive { reader.control(c) } else { overlay.showWorking("Not reading", autoClear: 1.5) }
         default:
             break
+        }
+    }
+
+    private func startReading(_ action: Action) {
+        if isDictating { isDictating = false; dictation.reset() }   // never type Sirena's own voice
+        closeFollowUpWindow()
+        overlay.showWorking("Getting the text…", autoClear: 4)
+        let front = RunningApps.frontmost()
+        Task.detached(priority: .userInitiated) { [weak self] in
+            var text = ""
+            var title: String?
+            switch action {
+            case .readSelection:
+                text = TextExtractor.selectedText() ?? ""
+                title = "Selection"
+            case .readArticle:
+                if let f = front { text = TextExtractor.articleText(pid: f.pid) }
+                title = front.flatMap { AXElement.application(pid: $0.pid).focusedWindow?.title } ?? "Article"
+            default:
+                if let f = front { text = TextExtractor.pageText(pid: f.pid) }
+                title = front?.name ?? "Page"
+            }
+            let trimmed = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40_000))
+            await MainActor.run {
+                guard let self else { return }
+                guard !trimmed.isEmpty else {
+                    self.overlay.showError(action == .readSelection ? "Select some text first" : "No readable text found", autoClear: 3)
+                    return
+                }
+                self.reader.read(trimmed, title: title)
+                self.overlay.showWorking("Reading — say stop, pause, faster or slower", autoClear: 3)
+            }
         }
     }
 }

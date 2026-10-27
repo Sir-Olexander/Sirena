@@ -104,8 +104,10 @@ public enum FastPathParser {
     }
 
     static func parseSingle(_ text: String, _ t: String, context: Context) -> ParsedCommand? {
+        if let c = noteCommand(text, t) { return c }
         if let c = typeCommand(text, t) { return c }
         if let c = messaging(text, t) { return c }
+        if let c = screenCommand(t) { return c }
         if let c = numbersClick(t, context: context) { return c }
         if let c = shortcut(t) { return c }
         if let c = media(t) { return c }
@@ -114,6 +116,7 @@ public enum FastPathParser {
         if let c = navigation(t, context: context) { return c }
         if let c = focusCommand(t) { return c }
         if let c = windowCommands(t) { return c }
+        if let c = editTextCommand(t) { return c }
         if let c = appSwitch(t) { return c }
         if let c = pressKeys(t) { return c }
         if let c = clicks(text, t) { return c }
@@ -141,12 +144,35 @@ public enum FastPathParser {
             return ParsedCommand(.hideNumbers, label: "Numbers hidden")
         case "undo", "undo that", "undo the last action", "undo last action", "take that back", "revert", "undo it":
             return ParsedCommand(.undo, label: "Undo")
-        case "cancel", "never mind", "nevermind", "forget it", "cancel that", "no", "abort", "leave it", "ignore that":
+        case "cancel", "never mind", "nevermind", "cancel that", "no", "abort", "leave it", "ignore that":
             return ParsedCommand(.cancel, label: "Cancelled")
         case "new line", "newline", "next line", "line break", "insert a new line", "go to the next line", "new paragraph", "paragraph", "insert new line":
             return ParsedCommand(.newLine, label: "New line")
         case "delete that", "scratch that", "delete the last thing", "remove that", "erase that", "delete the last sentence", "undo dictation", "delete last", "scratch", "delete what i said", "erase":
             return ParsedCommand(.deleteLastChunk, label: "Deleting that")
+        case "read this", "read that", "read it", "read the selection", "read selection", "read the selected text", "read this to me", "read that to me",
+             "read it to me", "read what i selected", "read the highlighted text", "read this out loud", "read it out loud", "read aloud", "read this aloud":
+            return ParsedCommand(.readSelection, label: "Reading the selection")
+        case "read the article", "read the article to me", "read this article", "read article", "read the story", "read the post", "read the main text",
+             "read the blog post", "read the news", "read the content", "read the article out loud", "read me the article":
+            return ParsedCommand(.readArticle, label: "Reading the article")
+        case "read the page", "read the whole page", "read this page", "read page", "read the screen", "read everything", "read the page to me",
+             "read the whole thing", "read all the text", "read the text on the page", "read me the page":
+            return ParsedCommand(.readPage, label: "Reading the page")
+        case "stop reading", "stop reading please":
+            return ParsedCommand(.readingControl(.stop), label: "Stopped reading")
+        case "pause reading": return ParsedCommand(.readingControl(.pause), label: "Paused")
+        case "resume reading", "continue reading", "keep reading": return ParsedCommand(.readingControl(.resume), label: "Resuming")
+        case "read faster", "speak faster", "talk faster": return ParsedCommand(.readingControl(.faster), label: "Faster")
+        case "read slower", "speak slower", "talk slower": return ParsedCommand(.readingControl(.slower), label: "Slower")
+        case "forget that", "forget that shortcut", "forget this shortcut", "forget the last shortcut", "unlearn that", "forget it":
+            return ParsedCommand(.forgetLearnedShortcut, label: "Forgetting that shortcut")
+        case "show my notes", "open my notes", "show notes", "show the notes", "my notes", "show snippets", "show my snippets", "open snippets", "open my snippets":
+            return ParsedCommand(.openNotesWindow, label: "Notes & snippets")
+        case "show shortcuts", "show my shortcuts", "open shortcuts", "open the shortcut book", "show the shortcut book", "shortcut book", "my shortcuts":
+            return ParsedCommand(.openShortcutsWindow, label: "Shortcut book")
+        case "show history", "show the history", "open history", "command history", "show command history", "show my history":
+            return ParsedCommand(.openHistoryWindow, label: "Command history")
         case "help", "what can you do", "what can i say", "show help", "commands":
             return ParsedCommand(.say("Try: switch to Chrome · next tab · scroll down · click Send · type hello · start dictating · show numbers · wait"), label: "Help")
         default:
@@ -194,7 +220,7 @@ public enum FastPathParser {
             if i == 2 {
                 let body = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !body.isEmpty else { continue }
-                return ParsedCommand([.focusComposer, .typeText(body), .confirmThen(message: "Send this message?", actions: [.pressReturnToSend])],
+                return ParsedCommand([.focusComposer, .typeText(body), .confirmThen(message: "Send “\(ConfirmationText.short(body))”?", actions: [.pressReturnToSend])],
                                      label: "Replying: “\(body.prefix(40))\(body.count > 40 ? "…" : "")”")
             }
             let target = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -202,7 +228,7 @@ public enum FastPathParser {
             guard !target.isEmpty, !body.isEmpty, target.split(separator: " ").count <= 4 else { continue }
             let app = target.replacingOccurrences(of: "^(?:the\\s+)?", with: "", options: .regularExpression)
             return ParsedCommand([.switchTo(app), .pause(ms: 400), .focusComposer, .typeText(body),
-                                  .confirmThen(message: "Send this message to \(app)?", actions: [.pressReturnToSend])],
+                                  .confirmThen(message: "Send “\(ConfirmationText.short(body))” to \(app)?", actions: [.pressReturnToSend])],
                                  label: "Messaging \(app): “\(body.prefix(40))\(body.count > 40 ? "…" : "")”")
         }
         return nil
@@ -270,7 +296,8 @@ public enum FastPathParser {
     static func navigation(_ t: String, context: Context) -> ParsedCommand? {
         if ["go back", "back", "navigate back", "previous page", "go to the previous page", "back page"].contains(t) { return ParsedCommand(.goBack) }
         if ["go forward", "forward", "navigate forward", "next page", "forward page"].contains(t) { return ParsedCommand(.goForward) }
-        if let m = t.firstMatch("^(?:google|search google for|google for|search the web for|search for|search|look up|lookup)\\s+(.+)$") {
+        if let m = t.firstMatch("^(?:google|search google for|google for|search the web for|search for|search|look up|lookup)\\s+(.+)$"),
+           !["app", "application", "page", "website", "site", "chrome", "drive", "docs", "sheets", "maps", "mail", "translate", "photos", "meet", "calendar"].contains(m[1]) {
             return ParsedCommand(.webSearch(m[1]))
         }
         if let m = t.firstMatch("^(?:open|go to|navigate to|visit|load)\\s+(?:the\\s+)?(?:website|site|url|web page|webpage|page)\\s+(.+)$") {
@@ -286,21 +313,86 @@ public enum FastPathParser {
     }
 
     static func appSwitch(_ t: String) -> ParsedCommand? {
-        let patterns = [
-            "^(?:switch|go|jump|change|move|get|head)\\s+(?:back\\s+)?(?:over\\s+)?to\\s+(?:the\\s+)?(.+?)(?:\\s+(?:app|application|window|please))?$",
-            "^(?:open|launch|start|run|show|show me|bring up|activate|pull up|take me to)\\s+(?:the\\s+)?(?:up\\s+)?(.+?)(?:\\s+(?:app|application|window|please))?$",
-            "^(.+?)\\s+(?:app|application)$",
+        // "switch to X" brings X forward (running app, tab, window). "open X" follows the open rule:
+        // an exact app name or "X app" opens the app, a website name opens the site in the front browser.
+        let patterns: [(String, Bool)] = [
+            ("^(?:switch|jump|change|move|get|head)\\s+(?:back\\s+)?(?:over\\s+)?to\\s+(?:the\\s+)?(.+?)(?:\\s+(?:window|please))?$", false),
+            ("^(?:go)\\s+back\\s+to\\s+(?:the\\s+)?(.+?)(?:\\s+(?:window|please))?$", false),
+            ("^(?:open|launch|start|run|show me|bring up|activate|pull up|take me to|go to|visit|load|navigate to|show)\\s+(?:the\\s+)?(?:up\\s+)?(.+?)(?:\\s+(?:window|please))?$", true),
+            ("^(.+?)\\s+(?:app|application)$", true),
         ]
-        for p in patterns {
+        for (p, isOpen) in patterns {
             guard let m = t.firstMatch(p) else { continue }
-            let target = m[1].trimmingCharacters(in: .whitespaces)
+            var target = m[1].trimmingCharacters(in: .whitespaces)
             guard !target.isEmpty, target.split(separator: " ").count <= 5 else { continue }
             if ["top", "bottom", "sleep", "next tab", "previous tab", "first tab", "last tab", "back", "forward", "the next tab", "it", "that", "numbers", "the numbers"].contains(target) { continue }
             if Numbers.parse(target) != nil { continue }
             if target.firstMatch("\\b(field|box|input|area|bar|button|link|menu|checkbox|icon)$") != nil { continue }
-            return ParsedCommand(.switchTo(target))
+            if p.hasPrefix("^(.+?)") { target += " app" }   // "Google app" keeps the word for the open rule
+            return ParsedCommand(isOpen ? .open(target) : .switchTo(target))
         }
         return nil
+    }
+
+    /// "note buy milk", "take a note: call the bank", "note that the meeting moved".
+    static func noteCommand(_ raw: String, _ t: String) -> ParsedCommand? {
+        let pattern = "^\\s*(?:please\\s+)?(?:take a note|make a note|add a note|new note saying|note down|jot down|write down a note|save a note|note)(?:\\s+that)?[\\s:,.-]+(.+)$"
+        guard let m = stripLeadIns(raw).firstMatch(pattern) else { return nil }
+        let body = m[1].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty, !["down", "this", "that"].contains(body.lowercased()) else { return nil }
+        return ParsedCommand(.saveNote(body), label: "Noted: “\(ConfirmationText.short(body))”")
+    }
+
+    /// "move this window to the other screen", "switch to the left monitor", "focus screen 2".
+    static func screenCommand(_ t: String) -> ParsedCommand? {
+        let screenWord = "(?:screen|monitor|display)"
+        func target(_ s: String) -> ScreenTarget? {
+            let w = s.trimmingCharacters(in: .whitespaces)
+            switch w {
+            case "other", "the other", "another", "second", "the second": return w.contains("second") ? .index(2) : .other
+            case "next", "the next": return .next
+            case "previous", "the previous", "last", "the last": return .previous
+            case "left", "the left", "left hand", "the left hand": return .left
+            case "right", "the right", "right hand", "the right hand": return .right
+            case "main", "the main", "primary", "the primary": return .main
+            case "laptop", "the laptop", "built in", "the built in", "macbook", "the macbook", "internal", "the internal": return .builtIn
+            case "external", "the external", "big", "the big": return .external
+            case "first", "the first": return .index(1)
+            case "third", "the third": return .index(3)
+            default: return nil
+            }
+        }
+        // "move this window to the other screen", "send it to screen 2", "put the window on the left monitor"
+        if let m = t.firstMatch("^(?:move|send|put|throw|drag|take)\\s+(?:this|the|that|it|my)?\\s*(?:window|app|application)?\\s*(?:over\\s+)?(?:to|on|onto|into)\\s+(.+?)\\s+\(screenWord)$") {
+            if let tg = target(m[1]) { return ParsedCommand(.moveWindowToScreen(tg)) }
+        }
+        if let m = t.firstMatch("^(?:move|send|put|throw|take)\\s+(?:this|the|that|it|my)?\\s*(?:window|app|application)?\\s*(?:over\\s+)?(?:to|on|onto)\\s+\(screenWord)\\s+(?:number\\s+)?(\\S+)$"), let n = Numbers.parse(m[1]) {
+            return ParsedCommand(.moveWindowToScreen(.index(n)))
+        }
+        if let m = t.firstMatch("^(?:switch|go|jump|move|change)\\s+(?:focus\\s+)?(?:over\\s+)?to\\s+(.+?)\\s+\(screenWord)$"), let tg = target(m[1]) {
+            return ParsedCommand(.focusScreen(tg))
+        }
+        if let m = t.firstMatch("^(?:focus|focus on|look at|go to)\\s+(.+?)\\s+\(screenWord)$"), let tg = target(m[1]) {
+            return ParsedCommand(.focusScreen(tg))
+        }
+        if let m = t.firstMatch("^(?:switch|go|jump|move)?\\s*(?:focus\\s+)?(?:to\\s+)?\(screenWord)\\s+(?:number\\s+)?(\\S+)$"), let n = Numbers.parse(m[1]) {
+            return ParsedCommand(.focusScreen(.index(n)))
+        }
+        if ["switch screens", "switch monitors", "switch displays", "other screen", "the other screen", "next screen", "change screen", "switch screen", "swap screens"].contains(t) {
+            return ParsedCommand(.focusScreen(.other))
+        }
+        return nil
+    }
+
+    /// Requests to reformat or rewrite text ("make that a list", "separate the points with two line breaks").
+    static func editTextCommand(_ t: String) -> ParsedCommand? {
+        guard t.firstMatch("\\b(window|tab|screen|monitor|display|volume|brightness|app|application|font size|zoom|full screen|fullscreen|bigger|smaller|louder|quieter|up|down|page|article|website|site|video|pdf|document|file|email|inbox)\\b") == nil else { return nil }
+        let verb = "(?:make|format|turn|convert|change|rewrite|re write|reformat|restructure|separate|split|put|fix|correct|clean up|tidy up|tidy|capitalize|uppercase|lowercase|shorten|expand|translate|number|bullet|add|insert|remove|indent|join|merge|sort|reorder|organize|organise|break|space out|polish|improve|summarize|rephrase)"
+        let object = "(?:that|it|this|the text|the points|the list|the items|the lines|the paragraphs?|the sentences?|each point|each item|each line|everything|the note|the message|line breaks?|new lines?|blank lines?|empty lines?|bullet points?|bullets|a list|numbered list|paragraphs?|grammar|punctuation|spelling|formal|casual|shorter|longer|title case|uppercase|lowercase|commas?|dashes|points|items|lines)"
+        guard t.firstMatch("^\(verb)\\b") != nil, t.firstMatch("\\b\(object)\\b") != nil else { return nil }
+        // "add a note …", "insert my email", "open …" are other commands.
+        if t.hasPrefix("add a note") || t.hasPrefix("insert my") || t.hasPrefix("put the cursor") { return nil }
+        return ParsedCommand(.editText(t), label: "Editing the text")
     }
 
     static func focusCommand(_ t: String) -> ParsedCommand? {
