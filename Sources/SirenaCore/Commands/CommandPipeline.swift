@@ -136,6 +136,14 @@ public final class CommandPipeline {
                         overlay.showConfirm(p.message)
                         return .init(summary: res.summary, stop: true, newSnapshotText: nil)
                     }
+                    // Scrolls, key presses and typing leave no trace in a snapshot; another round would only invite a repeat.
+                    let unverifiable = actions.allSatisfy { a in
+                        switch a {
+                        case .scroll, .scrollTo, .pressKeys, .keySequence, .typeText, .mediaKey, .pause, .goBack, .goForward, .reload, .closeTab, .newTab, .reopenTab: return true
+                        default: return false
+                        }
+                    }
+                    if unverifiable { return .init(summary: res.summary, stop: true, newSnapshotText: nil) }
                     let fresh = await Task.detached(priority: .userInitiated) { [context] in context.snapshot(includeElements: true, maxElements: 100).promptText() }.value
                     roundStart = Date()
                     return .init(summary: res.summary, stop: false, newSnapshotText: fresh)

@@ -78,6 +78,10 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         let ptt = item("Push-to-talk (hold ⌥ right = dictate, ⌘ right = command)", #selector(togglePTT), key: "")
         ptt.state = settings.pushToTalk ? .on : .off
         menu.addItem(ptt)
+        let lw = item("On-device wake word while waiting (no audio leaves the Mac)", #selector(toggleLocalWake), key: "")
+        lw.state = settings.localWakeWord ? .on : .off
+        lw.toolTip = "Uses Apple's on-device speech recognition to hear “Hey Sirena”; streaming to Meta starts only once she is awake."
+        menu.addItem(lw)
         let raw = item("Insert raw dictation (skip cleanup)", #selector(toggleRaw), key: "")
         raw.state = settings.rawDictation ? .on : .off
         menu.addItem(raw)
@@ -131,6 +135,7 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func togglePrivate() { settings.privateMode.toggle(); onPrivateModeChanged?(settings.privateMode) }
     @objc private func togglePTT() { settings.pushToTalk.toggle(); onSettingsChanged?() }
     @objc private func toggleRaw() { settings.rawDictation.toggle(); onSettingsChanged?() }
+    @objc private func toggleLocalWake() { settings.localWakeWord.toggle(); onSettingsChanged?() }
     @objc private func toggleLatency() { settings.showLatency.toggle(); onSettingsChanged?() }
     @objc private func toggleLarge() { settings.largeOverlay.toggle(); onSettingsChanged?() }
     @objc private func resetOverlay() { onResetOverlay?() }

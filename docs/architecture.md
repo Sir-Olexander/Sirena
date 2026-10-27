@@ -18,6 +18,13 @@ emits 80 ms chunks (3840 bytes). `RealtimeTranscriber` keeps one WebSocket sessi
 The `asr` latency shown in the overlay is the time between the audio frame where speech ended (as reported
 by `speechEnd.audioProcessedMs`) was sent and the `speechComplete` event.
 
+### On-device wake word
+
+In the waiting state `LocalWakeWordDetector` runs `SFSpeechRecognizer` with `requiresOnDeviceRecognition`
+on the raw microphone buffers and the Meta session is closed. When "Hey Sirena" (or a close misrecognition)
+shows up in the on-device partials, the realtime session is reopened and the state becomes awake. The
+recognizer request is rotated every 45 s because on-device requests are limited to about a minute.
+
 ## Listening state machine (`ListeningController`)
 
 * `off` → `awake` on click / menu / ⌃⌥⌘S. `awake` → `waiting` on "Sirena, wait" or 2 minutes of silence.
@@ -37,6 +44,11 @@ by `speechEnd.audioProcessedMs`) was sent and the `speechComplete` event.
    `need_screen`. The prompt is a compact snapshot (`ScreenSnapshot.promptText`): front app, windows, tabs,
    up to 120 interactive elements with labels. `reasoning_effort: minimal`, `prompt_cache_key` for the
    stable system prompt. A `confirm` call splits the plan: everything after it waits for "yes".
+   The planner runs a bounded loop (3 rounds): the tool calls of a round are executed, their results and a
+   fresh snapshot are fed back as tool messages, and the model either continues or answers with no tool
+   calls. Rounds made only of scrolls / key presses / typing end the loop immediately, because a snapshot
+   cannot show their effect and the model would be tempted to repeat them. A failed element lookup is
+   reported back so the model can try another label or hand over to the screenshot fallback.
 3. `ComputerUseAgent`: Responses API with `tools: [{"type": "computer"}]`, screenshots through
    ScreenCaptureKit with Sirena's own windows excluded, coordinates mapped from screenshot pixels to display
    points, 8 steps max, confirmation for safety checks and for Enter after typing.

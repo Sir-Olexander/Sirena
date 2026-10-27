@@ -107,7 +107,7 @@ public final class ModelCommandPlanner {
 
     /// Bounded agent loop: plan → execute → feed results and a fresh snapshot back → … (max `maxRounds`).
     /// `executeRound` runs one round's actions; returning `stop` ends the loop (confirmation pending, control action, handover).
-    public func run(command: String, snapshotText: String, maxRounds: Int = 4,
+    public func run(command: String, snapshotText: String, maxRounds: Int = 3,
                     executeRound: ([Action], Int) async throws -> RoundOutcome) async throws -> CommandPlan {
         guard let client = clientProvider() else { throw APIError.missingKey }
         var messages: [ChatMessage] = [.system(ModelCommandPlanner.systemPrompt),
@@ -151,7 +151,7 @@ public final class ModelCommandPlanner {
                 if isLast {
                     content = "Result: \(outcome.summary.isEmpty ? "done" : outcome.summary)"
                     if let snap = outcome.newSnapshotText { content += "\n\nScreen snapshot now:\n\(snap)" }
-                    content += "\n\nIf the spoken command is fully carried out, answer in a few words with no tool calls. Otherwise continue with the next tool calls."
+                    content += "\n\nEvery action above that did not report a failure has been carried out, even when the snapshot cannot show it (scrolling, key presses, typed text): never repeat it. If the spoken command is now fully carried out, answer in a few words with no tool calls. Otherwise continue with only the remaining steps."
                 }
                 messages.append(.tool(id: call.id, content: content))
             }

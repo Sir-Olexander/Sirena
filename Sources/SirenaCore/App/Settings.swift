@@ -15,6 +15,8 @@ public final class Settings: ObservableObject {
     @Published public var localModelBaseURL: String { didSet { defaults.set(localModelBaseURL, forKey: "localModelBaseURL") } }
     @Published public var onboardingDone: Bool { didSet { defaults.set(onboardingDone, forKey: "onboardingDone") } }
     @Published public var globalShortcutEnabled: Bool { didSet { defaults.set(globalShortcutEnabled, forKey: "globalShortcutEnabled") } }
+    /// While waiting, detect "Hey Sirena" on-device and keep audio off the network.
+    @Published public var localWakeWord: Bool { didSet { defaults.set(localWakeWord, forKey: "localWakeWord") } }
 
     /// Seconds of silence before an awake Sirena goes back to waiting.
     public var idleTimeout: TimeInterval = 120
@@ -44,5 +46,6 @@ public final class Settings: ObservableObject {
         localModelBaseURL = defaults.string(forKey: "localModelBaseURL") ?? ""
         onboardingDone = defaults.bool(forKey: "onboardingDone")
         globalShortcutEnabled = defaults.object(forKey: "globalShortcutEnabled") as? Bool ?? true
+        localWakeWord = defaults.object(forKey: "localWakeWord") as? Bool ?? true
     }
 }

@@ -47,8 +47,8 @@ public struct OverlayView: View {
 
     private var waitingPill: some View {
         HStack(spacing: 6 * scale) {
-            Image(systemName: "moon.zzz.fill").font(.system(size: 10 * scale))
-            Text(statusLine ?? "Say “Hey Sirena”").font(.system(size: 11 * scale, weight: .medium))
+            Image(systemName: model.privateListening ? "lock.fill" : "moon.zzz.fill").font(.system(size: 10 * scale))
+            Text(statusLine ?? (model.privateListening ? "Say “Hey Sirena” · on-device" : "Say “Hey Sirena”")).font(.system(size: 11 * scale, weight: .medium))
         }
         .foregroundColor(.white.opacity(0.75))
         .padding(.horizontal, 10 * scale).padding(.vertical, 5 * scale)

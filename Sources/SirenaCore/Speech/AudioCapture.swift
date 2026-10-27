@@ -10,6 +10,8 @@ public final class AudioCapture {
     public var onChunk: ((Data) -> Void)?
     /// Called on an audio thread with an RMS level in 0...1 (roughly) per chunk.
     public var onLevel: ((Float) -> Void)?
+    /// Called on an audio thread with the raw microphone buffer (native format), for on-device recognition.
+    public var onBuffer: ((AVAudioPCMBuffer) -> Void)?
 
     private let engine = AVAudioEngine()
     private var converter: AVAudioConverter?
@@ -65,6 +67,7 @@ public final class AudioCapture {
     }
 
     private func process(_ buffer: AVAudioPCMBuffer) {
+        onBuffer?(buffer)
         guard let converter else { return }
         let ratio = outFormat.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 64

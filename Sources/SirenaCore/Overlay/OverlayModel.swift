@@ -25,6 +25,8 @@ public final class OverlayModel: ObservableObject {
     @Published public var large = false
     @Published public private(set) var numbersVisible = false
     @Published public private(set) var connectionNote: String? = nil
+    /// Waiting with the on-device wake word: no audio leaves the Mac.
+    @Published public private(set) var privateListening = false
     /// True while the pill is expanded after recent activity.
     @Published public private(set) var isActive = false
 
@@ -51,6 +53,7 @@ public final class OverlayModel: ObservableObject {
     public func setNumbersVisible(_ v: Bool) { onMain { self.numbersVisible = v } }
     public func setConnection(_ note: String?) { onMain { self.connectionNote = note; if note != nil { self.touch() } } }
     public func setLatency(_ l: LatencyReport?) { onMain { self.latency = l } }
+    public func setPrivateListening(_ p: Bool) { onMain { self.privateListening = p } }
 
     public func pushLevel(_ v: Float) {
         levelThrottle += 1

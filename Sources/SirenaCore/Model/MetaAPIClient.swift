@@ -113,7 +113,7 @@ public final class MetaAPIClient: @unchecked Sendable {
     /// Idle timeout per request (time between packets).
     public var timeout: TimeInterval = 25
     /// Hard wall-clock limit for a chat completion.
-    public var chatDeadline: TimeInterval = 20
+    public var chatDeadline: TimeInterval = 45
     /// Hard wall-clock limit for a Responses API call (computer use sends images, allow more).
     public var responsesDeadline: TimeInterval = 60
     private let session: URLSession
@@ -178,11 +178,25 @@ public final class MetaAPIClient: @unchecked Sendable {
         }
     }
 
+    /// Set SIRENA_DEBUG_DUMP=/path/dir to write every chat request/response body there (never includes the key).
+    static let debugDumpDir: URL? = ProcessInfo.processInfo.environment["SIRENA_DEBUG_DUMP"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+
+    private func dump(_ name: String, _ data: Data) {
+        guard let dir = MetaAPIClient.debugDumpDir else { return }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let stamp = String(format: "%.3f", Date().timeIntervalSince1970)
+        try? data.write(to: dir.appendingPathComponent("\(stamp)-\(name).json"))
+    }
+
     public func chat(_ request: ChatRequest) async throws -> ChatResponse {
         let body = try JSONEncoder().encode(request)
+        dump("chat-request", body)
         let req = try self.request(path: "chat/completions", body: body)
         let deadline = chatDeadline
+        let started = Date()
         let data = try await MetaAPIClient.withDeadline(deadline) { [self] in try await perform(req) }
+        Log.model.info("chat completion in \(Int(Date().timeIntervalSince(started) * 1000)) ms (\(body.count) bytes)")
+        dump("chat-response", data)
         do { return try JSONDecoder().decode(ChatResponse.self, from: data) }
         catch { throw APIError.decoding(String(data: data, encoding: .utf8)?.prefix(300).description ?? error.localizedDescription) }
     }

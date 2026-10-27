@@ -26,6 +26,9 @@ mic ──► Muse Voice Transcribe (ENDPOINTING) ──► utterance router ─
 
 * **Three listening states.** Off (mic closed) → one click. Waiting (only "Hey Sirena" wakes her) → say
   "Sirena, wait" or 2 minutes of silence. Awake (continuous listening, each pause ends an utterance).
+* **Private waiting.** While waiting, "Hey Sirena" is detected with Apple's on-device speech recognition and
+  the stream to Meta is paused: no audio leaves the Mac until she is awake (lock icon in the pill). Falls back
+  to streaming if on-device recognition is unavailable; can be turned off in the menu.
 * **The "Sirena" rule.** A command only runs when the utterance starts with "Sirena" (or a close
   misrecognition such as "Serena"). For 6 seconds after a command the next one works without the name;
   the overlay shows a countdown ring. Background speech like "switch to Slack" does nothing.
@@ -64,6 +67,20 @@ time keeps the permission grants across rebuilds. Without an identity it falls b
 which makes macOS forget the permissions after each rebuild.
 
 Run the tests with `swift test`.
+
+### Developer CLI
+
+`swift run sirena-cli …` exercises the pieces without the app (nothing is executed on your Mac):
+
+```bash
+swift run sirena-cli transcribe sample.wav          # 24 kHz mono WAV through the realtime recognizer, with events and latency
+swift run sirena-cli parse "Sirena, go to the first tab" --follow-up   # router + fast-path parser
+swift run sirena-cli plan "open the API reference" --no-browser        # Muse Spark plan for the current screen
+swift run sirena-cli plan-demo                                         # the demo commands against a canned snapshot
+swift run sirena-cli snapshot                                          # what the model would see
+```
+
+Set `SIRENA_DEBUG_DUMP=/some/dir` to write every model request and response body there.
 
 ### Permissions
 
