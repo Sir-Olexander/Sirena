@@ -17,6 +17,7 @@ public final class AppController {
     let computerUse: ComputerUseAgent
     let pipeline: CommandPipeline
     let dictation: DictationEngine
+    let textEditor: TextEditor
     let transcriber: RealtimeTranscriber
     let audio = AudioCapture()
     let fallback: OneShotTranscriber
@@ -42,6 +43,7 @@ public final class AppController {
                                    overlay: overlayModel, history: history, settings: settings)
         dictation = DictationEngine(inserter: inserter, clientProvider: { localClientRef() }, modelName: { localModelRef() },
                                     skipCleanup: { settings.rawDictation })
+        textEditor = TextEditor(dictation: dictation, inserter: inserter, clientProvider: { localClientRef() }, modelName: { localModelRef() })
         transcriber = RealtimeTranscriber(apiKey: key)
         fallback = OneShotTranscriber(client: metaClient)
         listening = ListeningController(settings: settings, overlay: overlayModel, context: context, pipeline: pipeline, dictation: dictation,
@@ -53,6 +55,10 @@ public final class AppController {
         localModelRef = { [weak self] in self?.modelID() ?? "muse-spark-1.3" }
 
         context.customVocabulary = { settings.customVocabulary }
+        executor.textEditHandler = { [weak self] instruction in
+            guard let self else { return "" }
+            return try await self.textEditor.edit(instruction: instruction)
+        }
         computerUse.excludedWindowIDs = { [weak self] in
             guard let self else { return [] }
             return self.overlays.windowIDs + (self.numbers.windowID.map { [$0] } ?? [])

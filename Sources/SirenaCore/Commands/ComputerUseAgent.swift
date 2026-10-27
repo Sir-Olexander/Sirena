@@ -11,7 +11,8 @@ public final class ComputerUseAgent {
     public var excludedWindowIDs: () -> [CGWindowID] = { [] }
     public var onStatus: ((String) -> Void)?
     /// Asks the user (by voice / overlay) and returns true to proceed.
-    public var confirm: ((String) async -> Bool)?
+    /// Asks the user (by voice / overlay): question, optional detail line. Returns true to proceed.
+    public var confirm: ((String, String?) async -> Bool)?
     public var maxImageWidth = 1440
 
     public init(clientProvider: @escaping () -> MetaAPIClient?, modelName: @escaping () -> String) {
@@ -43,6 +44,7 @@ public final class ComputerUseAgent {
             ])]),
         ]
         var typedSinceLastCheck = false
+        var lastTyped: String?
         for step in 1...maxSteps {
             let body: JSON = .object([
                 "model": .string(modelName()),
@@ -66,24 +68,33 @@ public final class ComputerUseAgent {
             }
             // Safety checks
             var acknowledged: [JSON] = []
+            let actions = call["actions"]?.arrayValue ?? (call["action"].map { [$0] } ?? [])
             if let checks = call["pending_safety_checks"]?.arrayValue, !checks.isEmpty {
-                let msg = checks.compactMap { $0["message"]?.stringValue }.joined(separator: " ")
-                let ok = await confirm?("The screen agent wants to continue: \(msg). Allow?") ?? false
-                if !ok { return "Stopped at the safety check" }
+                // Say exactly what is about to happen; the safety warning is only the second line.
+                let warning = checks.compactMap { $0["message"]?.stringValue }.joined(separator: " ")
+                let question = ComputerUseAgent.describe(actions, shot: shot) + "?"
+                let ok = await confirm?(question, warning.isEmpty ? nil : "Safety check: \(warning)") ?? false
+                if !ok { return "Stopped before: \(question.dropLast())" }
                 acknowledged = checks
             }
-            let actions = call["actions"]?.arrayValue ?? (call["action"].map { [$0] } ?? [])
             for action in actions {
                 let type = action["type"]?.stringValue ?? ""
                 onStatus?("Step \(step): \(type)")
                 if type == "keypress", typedSinceLastCheck, let keys = action["keys"]?.arrayValue?.compactMap({ $0.stringValue }),
                    keys.contains(where: { ["enter", "return"].contains($0.lowercased()) }) {
-                    let ok = await confirm?("Press Enter to submit?") ?? false
+                    let app = RunningApps.frontmost()?.name
+                    let question = (lastTyped.map { "Type “\(ConfirmationText.short($0))” and press Enter" } ?? "Press Enter") + (app.map { " in \($0)" } ?? "") + "?"
+                    let ok = await confirm?(question, "This usually sends or submits.") ?? false
                     if !ok { return "Cancelled before pressing Enter" }
                     typedSinceLastCheck = false
                 }
+                if type == "click", let label = ComputerUseAgent.elementLabel(at: ComputerUseAgent.point(action, shot: shot)), Action.irreversibleLabel(label.label) {
+                    let question = "Click “\(label.label)”" + (label.app.map { " in \($0)" } ?? "") + "?"
+                    let ok = await confirm?(question, nil) ?? false
+                    if !ok { return "Cancelled before clicking “\(label.label)”" }
+                }
                 try perform(action, shot: shot)
-                if type == "type" { typedSinceLastCheck = true }
+                if type == "type" { typedSinceLastCheck = true; lastTyped = action["text"]?.stringValue }
                 usleep(250_000)
             }
             usleep(400_000)
@@ -96,6 +107,59 @@ public final class ComputerUseAgent {
             ]))
         }
         return "Stopped after \(maxSteps) steps"
+    }
+
+    static func point(_ action: JSON, shot: Shot) -> CGPoint {
+        CGPoint(x: (action["x"]?.doubleValue ?? 0) * shot.scaleX, y: (action["y"]?.doubleValue ?? 0) * shot.scaleY)
+    }
+
+    /// Label of the element under a screen point (through Accessibility) and the app it belongs to.
+    static func elementLabel(at p: CGPoint) -> (label: String, app: String?)? {
+        var ref: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(p.x), Float(p.y), &ref) == .success, let ref else { return nil }
+        var el: AXElement? = AXElement(ref)
+        var depth = 0
+        while let e = el, depth < 4 {
+            let l = e.label.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !l.isEmpty, l.count <= 60 {
+                let app = NSRunningApplication(processIdentifier: e.pid)?.localizedName
+                return (l, app)
+            }
+            el = e.parent
+            depth += 1
+        }
+        return nil
+    }
+
+    /// "Click “Send” in WhatsApp", "Type “hello” and press Enter in Notes", for the actions of one step.
+    static func describe(_ actions: [JSON], shot: Shot) -> String {
+        var parts: [String] = []
+        var app: String?
+        for a in actions {
+            switch a["type"]?.stringValue ?? "" {
+            case "click", "double_click", "triple_click":
+                let p = point(a, shot: shot)
+                if let hit = elementLabel(at: p) {
+                    app = app ?? hit.app
+                    parts.append("\(a["type"]?.stringValue == "click" ? "click" : "double-click") “\(hit.label)”")
+                } else {
+                    parts.append("click at \(Int(p.x)), \(Int(p.y))")
+                }
+            case "type": parts.append("type “\(ConfirmationText.short(a["text"]?.stringValue ?? ""))”")
+            case "keypress", "key":
+                let keys = a["keys"]?.arrayValue?.compactMap { $0.stringValue } ?? []
+                let name = keys.map { k -> String in ["enter", "return"].contains(k.lowercased()) ? "Enter" : k }.joined(separator: "+")
+                parts.append("press \(name.isEmpty ? "a key" : name)")
+            case "scroll": parts.append((a["scroll_y"]?.intValue ?? 0) < 0 ? "scroll up" : "scroll down")
+            case "drag": parts.append("drag on the screen")
+            default: break
+            }
+        }
+        if parts.isEmpty { parts = ["continue"] }
+        var text = parts.count > 1 ? parts.dropLast().joined(separator: ", ") + " and " + parts.last! : parts[0]
+        text = text.prefix(1).uppercased() + text.dropFirst()
+        if let a = app ?? RunningApps.frontmost()?.name { text += " in \(a)" }
+        return text
     }
 
     static func assistantText(_ output: [JSON]) -> String? {
@@ -155,6 +219,7 @@ public final class ComputerUseAgent {
     }
 
     func screenshot() async throws -> Shot {
+        SessionStats.shared.noteScreenshot()
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         guard let display = content.displays.first(where: { $0.displayID == CGMainDisplayID() }) ?? content.displays.first else {
             throw ExecutionError.failed("No display")

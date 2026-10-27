@@ -32,6 +32,8 @@ public enum Route: Equatable {
     case command(String)
     case confirm(Bool)
     case dictation(String)
+    /// Dictated text that ends with "…, Sirena, stop": type the text, then run the command.
+    case dictationThenCommand(String, String)
     case reading(ReadingControl)
     case ignore(String)
 }
@@ -94,7 +96,14 @@ public enum UtteranceRouter {
             return .command(rest)
         }
 
-        if context.isDictating { return .dictation(text) }
+        if context.isDictating {
+            if let (before, command) = splitTrailingCommand(text) {
+                return WakeWord.normalize(before).isEmpty ? .command(command) : .dictationThenCommand(before, command)
+            }
+            return .dictation(text)
+        }
+        // "… something else. Sirena, wait." — the recognizer merged two utterances; the name starts the second one.
+        if let command = commandAfterSentenceBreak(text) { return .command(command) }
         if context.inFollowUpWindow { return .command(text) }
         if context.numbersVisible, let n = Numbers.parse(norm) { return .command("click \(n)") }
         return .ignore("no name")
@@ -102,6 +111,27 @@ public enum UtteranceRouter {
 }
 
 extension UtteranceRouter {
+    static let nameSplitRegex = try! NSRegularExpression(pattern: "(?:^|[.!?,;:]\\s*|\\s)((?:hey\\s+)?(?:" + WakeWord.nameVariants.filter { !$0.contains(" ") && $0 != "siren" }.joined(separator: "|") + "))[,.!]?\\s+(\\S.*)$", options: [.caseInsensitive])
+
+    /// "the meeting moved to Friday. Sirena, stop" → ("the meeting moved to Friday.", "stop").
+    /// Only Sirena's own short controls count, so dictating "ask Sirena about it" stays dictation.
+    public static func splitTrailingCommand(_ text: String) -> (String, String)? {
+        let ns = text as NSString
+        let matches = nameSplitRegex.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        guard let m = matches.last else { return nil }
+        let command = ns.substring(with: m.range(at: 2)).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard command.split(separator: " ").count <= 4, FastPathParser.controlCommand(command) != nil else { return nil }
+        let before = ns.substring(to: m.range(at: 1).location).trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ",")))
+        return (before, command)
+    }
+
+    /// "Não pode ajudar com isso. Sirena, wait." → "wait" (the name right after a sentence break).
+    static func commandAfterSentenceBreak(_ text: String) -> String? {
+        guard let r = text.range(of: "[.!?]\\s+(?:hey\\s+)?(?:" + WakeWord.nameVariants.filter { !$0.contains(" ") && $0 != "siren" }.joined(separator: "|") + ")[,.!]?\\s+", options: [.regularExpression, .caseInsensitive, .backwards]) else { return nil }
+        let rest = String(text[r.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return WakeWord.normalize(rest).isEmpty ? nil : rest
+    }
+
     static let readingWords: [String: ReadingControl] = [
         "stop": .stop, "stop reading": .stop, "stop it": .stop, "enough": .stop, "that's enough": .stop, "quiet": .stop, "shut up": .stop, "be quiet": .stop,
         "pause": .pause, "pause reading": .pause, "wait": .pause, "hold on": .pause, "pause it": .pause, "hold": .pause,

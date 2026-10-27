@@ -186,6 +186,7 @@ public final class ListeningController {
     public func turnOn(method: String = "click") {
         guard state == .off else { wake(method: method); return }
         if simulateInput {
+            beginSession()
             state = .awake
             onStateChange?(.awake)
             overlay.showWorking("Listening (simulated)", autoClear: 1.5)
@@ -206,6 +207,7 @@ public final class ListeningController {
                 return
             }
             self.usingFallback = false
+            self.beginSession()
             self.transcriber.start()
             self.state = .awake
             self.onStateChange?(.awake)
@@ -234,6 +236,7 @@ public final class ListeningController {
         onStateChange?(.off)
         overlay.clearMode()
         overlay.setPartial("")
+        endSession()
         Log.listening.info("turned off")
     }
 
@@ -298,12 +301,29 @@ public final class ListeningController {
         stopLocalWake(replay: method == "on-device")
         wokeAt = Date()
         lastWakeMethod = method
+        if method == "click" || method == "shortcut" { history.append(HistoryEntry(utterance: "(\(method))", route: "wake", wakeMethod: method)) }
         state = .awake
         onStateChange?(.awake)
         overlay.showWorking("I'm here", autoClear: 1.5)
         resetIdleTimer()
         openFollowUpWindow()
         Log.listening.info("awake")
+    }
+
+    // MARK: - Sessions
+
+    public var onSessionEnded: ((SessionRecord?) -> Void)?
+
+    private func beginSession() {
+        let id = UUID().uuidString
+        HistoryLog.currentSessionId = id
+        SessionStats.shared.begin(id: id)
+    }
+
+    private func endSession() {
+        let record = SessionStats.shared.end()
+        HistoryLog.currentSessionId = nil
+        onSessionEnded?(record)
     }
 
     // MARK: - Follow-up window & idle timer
@@ -373,7 +393,7 @@ public final class ListeningController {
         }
     }
 
-    private func route(_ text: String, asrMs: Int?) {
+    private func route(_ text: String, asrMs: Int?, forceDictation: Bool = false) {
         // Sirena hearing herself read: never act on it.
         if reader.recentlyActive, reader.isLikelyEcho(text) {
             history.append(HistoryEntry(utterance: text, route: "ignored (own voice)", latency: LatencyReport(asrMs: asrMs)))
@@ -382,7 +402,7 @@ public final class ListeningController {
         let ctx = RouterContext(state: state, isDictating: isDictating, hasPendingConfirmation: pipeline.hasPendingConfirmation,
                                 inFollowUpWindow: inFollowUpWindow, numbersVisible: numbers.isVisible, pushToTalk: pushToTalkKey,
                                 isReading: reader.isActive)
-        let decision = UtteranceRouter.route(text, context: ctx)
+        let decision = forceDictation ? .dictation(text) : UtteranceRouter.route(text, context: ctx)
         Log.listening.info("utterance \"\(text, privacy: .public)\" → \(String(describing: decision), privacy: .public)")
         if state == .awake { resetIdleTimer() }
         switch decision {
@@ -412,6 +432,11 @@ public final class ListeningController {
             history.append(HistoryEntry(utterance: text, route: "confirmation", result: yes ? "yes" : "no", latency: LatencyReport(asrMs: asrMs)))
             pipeline.resolveConfirmation(yes)
             if yes { openFollowUpWindow() }
+        case .dictationThenCommand(let dictated, let command):
+            route(dictated, asrMs: asrMs, forceDictation: true)
+            enqueueDictation { [weak self] in
+                await MainActor.run { self?.pipeline.handle(command: command, asrMs: asrMs) }
+            }
         case .dictation(let dictated):
             let continuing = Date().timeIntervalSince(lastDictationChunkAt) < 180
             lastDictationChunkAt = Date()
@@ -448,7 +473,7 @@ public final class ListeningController {
         case .turnOff: turnOff()
         case .startDictation:
             isDictating = true
-            dictation.reset()
+            dictation.beginSession(frontApp: RunningApps.frontmost())
             lastDictationChunkAt = .distantPast
             closeFollowUpWindow()
             overlay.showWorking("Dictating — say “Sirena, stop” to finish", autoClear: 3)

@@ -72,12 +72,30 @@ public enum FastPathParser {
 
     // MARK: Entry point
 
-    public static func parse(_ raw: String, context: Context = Context()) -> ParsedCommand? {
-        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        let t = WakeWord.normalize(text)
+    /// Lowercased command without punctuation and polite lead-ins ("please", "can you"…).
+    public static func normalize(_ raw: String) -> String {
+        WakeWord.normalize(raw.trimmingCharacters(in: .whitespacesAndNewlines))
             .replacingOccurrences(of: "^(?:please|can you|could you|would you|will you|i want you to|i want to|let's|lets|go ahead and|now|just|um|uh|so)\\s+", with: "", options: .regularExpression)
             .replacingOccurrences(of: "\\s+please$", with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Sirena's own controls only (wait, stop, dictation, numbers, reading…), or nil.
+    public static func controlCommand(_ raw: String, context: Context = Context()) -> ParsedCommand? {
+        control(normalize(raw), context: context)
+    }
+
+    /// Looks like a request to edit text rather than to act on the screen.
+    public static func looksLikeTextEdit(_ raw: String) -> Bool {
+        let t = normalize(raw)
+        if editTextCommand(t) != nil { return true }
+        return t.firstMatch("\\b(line breaks?|new lines?|bullet points?|bullets|numbered list|a list|paragraphs?|grammar|punctuation|spelling|capitali[sz]e|indent|reformat|rewrite|rephrase|formatting)\\b") != nil
+            && t.firstMatch("\\b(window|tab|screen|page|website|app)\\b") == nil
+    }
+
+    public static func parse(_ raw: String, context: Context = Context()) -> ParsedCommand? {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let t = normalize(text)
         guard !t.isEmpty else { return nil }
 
         if let c = control(t, context: context) { return c }

@@ -181,6 +181,7 @@ case "simulate":
     let pipeline = CommandPipeline(context: context, executor: executor, planner: planner, computerUse: cu, overlay: overlay, history: HistoryLog(directory: URL(fileURLWithPath: "/tmp/sirena-sim")), settings: settings)
     let dictation = DictationEngine(inserter: TextInserter.shared, clientProvider: { client }, modelName: { "muse-spark-1.3" }, skipCleanup: { flags.contains("--raw") })
     dictation.dryRun = true
+    dictation.fieldText = { nil }
     let transcriber = RealtimeTranscriber(apiKey: nil)
     let controller = ListeningController(settings: settings, overlay: overlay, context: context, pipeline: pipeline, dictation: dictation,
                                          transcriber: transcriber, audio: AudioCapture(), fallback: nil, history: HistoryLog(directory: URL(fileURLWithPath: "/tmp/sirena-sim")), numbers: numbers)

@@ -58,6 +58,7 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
     private func rawSend(_ pcm: Data) {
         let ms = Double(pcm.count) / 2.0 / AudioCapture.sampleRate * 1000
         audioMsSent += ms
+        SessionStats.shared.addAudio(seconds: ms / 1000)
         sendTimes.append((audioMsSent, Date()))
         if sendTimes.count > 400 { sendTimes.removeFirst(sendTimes.count - 400) }
         task.send(.data(pcm)) { [weak self] err in
@@ -302,6 +303,7 @@ public final class RealtimeTranscriber {
 
     private func scheduleReconnect() {
         reconnectAttempt += 1
+        SessionStats.shared.recordReconnect()
         let delay = min(10.0, 0.5 * pow(2.0, Double(reconnectAttempt - 1)))
         emit(.reconnecting(attempt: reconnectAttempt))
         queue.asyncAfter(deadline: .now() + delay) { [weak self] in

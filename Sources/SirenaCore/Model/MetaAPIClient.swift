@@ -188,7 +188,7 @@ public final class MetaAPIClient: @unchecked Sendable {
         try? data.write(to: dir.appendingPathComponent("\(stamp)-\(name).json"))
     }
 
-    public func chat(_ request: ChatRequest) async throws -> ChatResponse {
+    public func chat(_ request: ChatRequest, category: UsageCategory = .commands) async throws -> ChatResponse {
         let body = try JSONEncoder().encode(request)
         dump("chat-request", body)
         let req = try self.request(path: "chat/completions", body: body)
@@ -197,16 +197,30 @@ public final class MetaAPIClient: @unchecked Sendable {
         let data = try await MetaAPIClient.withDeadline(deadline) { [self] in try await perform(req) }
         Log.model.info("chat completion in \(Int(Date().timeIntervalSince(started) * 1000)) ms (\(body.count) bytes)")
         dump("chat-response", data)
-        do { return try JSONDecoder().decode(ChatResponse.self, from: data) }
+        do {
+            let resp = try JSONDecoder().decode(ChatResponse.self, from: data)
+            if let u = resp.usage {
+                SessionStats.shared.addTokens(category, input: u.prompt_tokens ?? 0, cached: u.prompt_tokens_details?.cached_tokens ?? 0,
+                                              output: u.completion_tokens ?? 0, reasoning: u.completion_tokens_details?.reasoning_tokens ?? 0, local: isLocal)
+            }
+            return resp
+        }
         catch { throw APIError.decoding(String(data: data, encoding: .utf8)?.prefix(300).description ?? error.localizedDescription) }
     }
 
     /// Responses API (used for computer use). Dynamic JSON in and out.
-    public func responses(_ body: JSON) async throws -> JSON {
+    public func responses(_ body: JSON, category: UsageCategory = .screen) async throws -> JSON {
         let req = try self.request(path: "responses", body: try body.data())
         let deadline = responsesDeadline
         let data = try await MetaAPIClient.withDeadline(deadline) { [self] in try await perform(req) }
-        do { return try JSON.parse(data) }
+        do {
+            let json = try JSON.parse(data)
+            if let u = json["usage"] {
+                SessionStats.shared.addTokens(category, input: u["input_tokens"]?.intValue ?? 0, cached: u["input_tokens_details"]?["cached_tokens"]?.intValue ?? 0,
+                                              output: u["output_tokens"]?.intValue ?? 0, reasoning: u["output_tokens_details"]?["reasoning_tokens"]?.intValue ?? 0, local: isLocal)
+            }
+            return json
+        }
         catch { throw APIError.decoding(error.localizedDescription) }
     }
 
@@ -235,6 +249,7 @@ public final class MetaAPIClient: @unchecked Sendable {
         part("\r\n--\(boundary)--\r\n")
         let req = try self.request(path: "asr/transcribe", body: body, contentType: "multipart/form-data; boundary=\(boundary)")
         let data = try await MetaAPIClient.withDeadline(30) { [self] in try await perform(req) }
+        SessionStats.shared.addAudio(seconds: Double(max(0, wav.count - 44)) / 2 / AudioCapture.sampleRate)
         let json = try JSON.parse(data)
         return json["transcript"]?.stringValue ?? ""
     }

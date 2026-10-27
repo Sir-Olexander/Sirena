@@ -76,6 +76,16 @@ final class RouterTests: XCTestCase {
         XCTAssertEqual(UtteranceRouter.route("I'm building Sirena", context: ctx), .dictation("I'm building Sirena"))
     }
 
+    func testTrailingCommandsAndSentenceBreaks() {
+        let dict = RouterContext(state: .awake, isDictating: true)
+        XCTAssertEqual(UtteranceRouter.route("the meeting moved to Friday. Sirena, stop", context: dict), .dictationThenCommand("the meeting moved to Friday.", "stop"))
+        XCTAssertEqual(UtteranceRouter.route("I'm building Sirena", context: dict), .dictation("I'm building Sirena"))
+        XCTAssertEqual(UtteranceRouter.route("ask Sirena about the budget", context: dict), .dictation("ask Sirena about the budget"))
+        let awake = RouterContext(state: .awake)
+        XCTAssertEqual(UtteranceRouter.route("Não pode ajudar com isso. Sirena, wait.", context: awake), .command("wait."))
+        XCTAssertEqual(UtteranceRouter.route("we talked about Sirena yesterday", context: awake), .ignore("no name"))
+    }
+
     func testConfirmation() {
         let ctx = RouterContext(state: .awake, hasPendingConfirmation: true)
         XCTAssertEqual(UtteranceRouter.route("Yes.", context: ctx), .confirm(true))

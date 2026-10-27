@@ -25,6 +25,10 @@ public final class ModelCommandPlanner {
 
     Guidelines:
     - Prefer the cheapest direct action: activate_app for app switching, switch_tab for browser tabs, press_keys for shortcuts, click_element / focus_element with the exact label from the element list.
+    - "open X": use open (an exact app name opens the app; a website name such as Google, YouTube or Gmail opens the site in the browser in front).
+    - Requests to change the wording or formatting of text the user dictated or that is in the focused text field ("make that a list", "separate the points with two line breaks", "fix the grammar") → edit_text with the instruction. Never use need_screen for text edits.
+    - Several screens: move_window_to_screen and focus_screen (targets: next, previous, other, left, right, main, built-in, external, or a number from the Screens line).
+    - read_aloud reads the selection, the article or the page. save_note saves a note without leaving the app. choose_menu_item picks a menu bar item by path.
     - "Windows" phrasing maps to the Mac equivalent (Alt+Tab → cmd+tab, Ctrl+C → cmd+c, Alt+F4 → cmd+q, F5 → cmd+r).
     - To send a message or chat prompt: activate_app if needed, focus_element on the composer (or focus_composer), type_text with the message, then confirm("Send this message?") and finally press_keys("return"). Never press Enter to send, delete, submit a purchase or close unsaved work without a confirm step right before it.
     - Use scroll for scrolling, open_url for websites, web_search for searches.
@@ -57,6 +61,20 @@ public final class ModelCommandPlanner {
                  parameters: ["type": "object", "properties": ["query": ["type": "string"]], "required": ["query"]]),
         ChatTool(name: "confirm", description: "Ask the user to confirm before the following tool calls run. Required before sending, deleting, buying or closing unsaved work.",
                  parameters: ["type": "object", "properties": ["message": ["type": "string", "description": "Short question, e.g. 'Send this message?'"]], "required": ["message"]]),
+        ChatTool(name: "open", description: "Open an app or a website by name ('Notes', 'Google', 'YouTube', 'github.com'). Exact app names open the app; website names open in the front browser.",
+                 parameters: ["type": "object", "properties": ["name": ["type": "string"]], "required": ["name"]]),
+        ChatTool(name: "edit_text", description: "Rewrite or reformat the text the user just dictated (else the selection or the focused field) following the instruction.",
+                 parameters: ["type": "object", "properties": ["instruction": ["type": "string"]], "required": ["instruction"]]),
+        ChatTool(name: "move_window_to_screen", description: "Move the front window to another screen.",
+                 parameters: ["type": "object", "properties": ["target": ["type": "string", "description": "next, previous, other, left, right, main, built-in, external, or a screen number"]], "required": ["target"]]),
+        ChatTool(name: "focus_screen", description: "Focus the topmost window on another screen.",
+                 parameters: ["type": "object", "properties": ["target": ["type": "string"]], "required": ["target"]]),
+        ChatTool(name: "read_aloud", description: "Read text aloud: the selection, the article (main content only) or the whole page.",
+                 parameters: ["type": "object", "properties": ["what": ["type": "string", "enum": ["selection", "article", "page"]]], "required": ["what"]]),
+        ChatTool(name: "save_note", description: "Save a note for the user without leaving the current app.",
+                 parameters: ["type": "object", "properties": ["text": ["type": "string"]], "required": ["text"]]),
+        ChatTool(name: "choose_menu_item", description: "Choose a menu bar item of the front app by path, e.g. 'File > New Note'.",
+                 parameters: ["type": "object", "properties": ["path": ["type": "string"]], "required": ["path"]]),
         ChatTool(name: "need_screen", description: "Hand over to the screenshot-based fallback with a concise goal, when the element list is not enough.",
                  parameters: ["type": "object", "properties": ["goal": ["type": "string"]], "required": ["goal"]]),
     ]
@@ -198,8 +216,43 @@ public final class ModelCommandPlanner {
             return [.confirmThen(message: s("message") ?? "Do it?", actions: [])]
         case "need_screen":
             return [.computerUse(goal: s("goal") ?? "")]
+        case "open":
+            guard let n = s("name"), !n.isEmpty else { return [] }
+            return [.open(n)]
+        case "edit_text":
+            return [.editText(s("instruction") ?? "rewrite")]
+        case "move_window_to_screen", "focus_screen":
+            let target = ModelCommandPlanner.screenTarget(s("target") ?? "other")
+            return [name == "focus_screen" ? .focusScreen(target) : .moveWindowToScreen(target)]
+        case "read_aloud":
+            switch s("what") ?? "page" {
+            case "selection": return [.readSelection]
+            case "article": return [.readArticle]
+            default: return [.readPage]
+            }
+        case "save_note":
+            guard let t = s("text"), !t.isEmpty else { return [] }
+            return [.saveNote(t)]
+        case "choose_menu_item":
+            guard let p = s("path"), !p.isEmpty else { return [] }
+            return [.selectMenu(p)]
         default:
             return []
+        }
+    }
+
+    static func screenTarget(_ raw: String) -> ScreenTarget {
+        let t = WakeWord.normalize(raw)
+        if let n = Numbers.parse(t) { return .index(n) }
+        switch t {
+        case "next": return .next
+        case "previous", "prev": return .previous
+        case "left": return .left
+        case "right": return .right
+        case "main", "primary": return .main
+        case "built in", "builtin", "laptop", "internal": return .builtIn
+        case "external": return .external
+        default: return .other
         }
     }
 

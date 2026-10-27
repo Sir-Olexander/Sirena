@@ -352,6 +352,22 @@ public enum Keyboard {
         return true
     }
 
+    /// Fast repetition (e.g. selecting text character by character): ~3 ms per press.
+    public static func pressRepeated(_ combo: KeyCombo, count: Int) {
+        guard let code = KeyNames.code(for: combo.key), count > 0 else { return }
+        let flags = flags(for: combo.modifiers)
+        let src = CGEventSource(stateID: .combinedSessionState)
+        for _ in 0..<count {
+            guard let down = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: false) else { return }
+            down.flags = flags; up.flags = flags
+            down.post(tap: .cghidEventTap)
+            up.post(tap: .cghidEventTap)
+            usleep(3_000)
+        }
+        usleep(30_000)
+    }
+
     public static func press(_ combos: [KeyCombo]) {
         for c in combos { press(c); usleep(40_000) }
     }

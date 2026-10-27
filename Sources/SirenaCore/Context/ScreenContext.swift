@@ -11,6 +11,7 @@ public struct ScreenSnapshot {
     public var browser: BrowserInfo?
     public var elements: [UIElementInfo] = []
     public var focusedDescription: String?
+    public var screensLine: String?
     public var capturedAt = Date()
 
     public var frontAppName: String { frontApp?.name ?? "unknown" }
@@ -26,6 +27,7 @@ public struct ScreenSnapshot {
             lines.append("\(b.app.name) tabs (active = \(b.activeIndex)): \(tabs)")
         }
         if let f = focusedDescription { lines.append("Focused element: \(f)") }
+        if let sc = screensLine { lines.append(sc) }
         if !elements.isEmpty {
             lines.append("Interactive elements in the front window (id kind \"label\"):")
             for e in elements.prefix(maxElements) {
@@ -48,6 +50,7 @@ public final class ScreenContext {
         var snap = ScreenSnapshot()
         snap.apps = RunningApps.list()
         snap.frontApp = RunningApps.frontmost()
+        snap.screensLine = Screens.describe()
         if let front = snap.frontApp, front.bundleId != Bundle.main.bundleIdentifier {
             if AX.isTrusted {
                 if front.bundleId.contains("google.Chrome") || front.bundleId.contains("electron") || isElectronLike(front) {
