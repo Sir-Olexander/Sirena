@@ -52,10 +52,14 @@ public final class ComputerUseAgent {
                 "reasoning": ["effort": "low"],
                 "max_output_tokens": 2500,
                 "parallel_tool_calls": false,
+                "include": ["reasoning.encrypted_content"],
             ])
             let resp = try await client.responses(body)
             guard let output = resp["output"]?.arrayValue else { throw APIError.decoding("no output") }
-            input += output
+            // With store:false the history is replayed; reasoning items can only be replayed with their encrypted content.
+            input += output.filter { item in
+                item["type"]?.stringValue != "reasoning" || !(item["encrypted_content"]?.stringValue ?? "").isEmpty
+            }
             guard let call = output.first(where: { $0["type"]?.stringValue == "computer_call" }) else {
                 let text = ComputerUseAgent.assistantText(output) ?? "Done"
                 return text

@@ -107,10 +107,15 @@ public enum APIError: Error, LocalizedError {
 }
 
 /// Thin client for the Meta Model API (also works against any OpenAI-compatible local server).
-public final class MetaAPIClient {
+public final class MetaAPIClient: @unchecked Sendable {
     public let baseURL: URL
     public var apiKey: String?
+    /// Idle timeout per request (time between packets).
     public var timeout: TimeInterval = 25
+    /// Hard wall-clock limit for a chat completion.
+    public var chatDeadline: TimeInterval = 20
+    /// Hard wall-clock limit for a Responses API call (computer use sends images, allow more).
+    public var responsesDeadline: TimeInterval = 60
     private let session: URLSession
 
     public static let metaBaseURL = URL(string: "https://api.meta.ai/v1")!
@@ -159,10 +164,25 @@ public final class MetaAPIClient {
         return data
     }
 
+    /// Runs `operation` with a wall-clock deadline.
+    static func withDeadline<T>(_ seconds: TimeInterval, _ operation: @escaping @Sendable () async throws -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(max(0.1, seconds) * 1_000_000_000))
+                throw APIError.timeout
+            }
+            guard let result = try await group.next() else { throw APIError.timeout }
+            group.cancelAll()
+            return result
+        }
+    }
+
     public func chat(_ request: ChatRequest) async throws -> ChatResponse {
         let body = try JSONEncoder().encode(request)
         let req = try self.request(path: "chat/completions", body: body)
-        let data = try await perform(req)
+        let deadline = chatDeadline
+        let data = try await MetaAPIClient.withDeadline(deadline) { [self] in try await perform(req) }
         do { return try JSONDecoder().decode(ChatResponse.self, from: data) }
         catch { throw APIError.decoding(String(data: data, encoding: .utf8)?.prefix(300).description ?? error.localizedDescription) }
     }
@@ -170,7 +190,8 @@ public final class MetaAPIClient {
     /// Responses API (used for computer use). Dynamic JSON in and out.
     public func responses(_ body: JSON) async throws -> JSON {
         let req = try self.request(path: "responses", body: try body.data())
-        let data = try await perform(req)
+        let deadline = responsesDeadline
+        let data = try await MetaAPIClient.withDeadline(deadline) { [self] in try await perform(req) }
         do { return try JSON.parse(data) }
         catch { throw APIError.decoding(error.localizedDescription) }
     }
@@ -199,7 +220,7 @@ public final class MetaAPIClient {
         body.append(wav)
         part("\r\n--\(boundary)--\r\n")
         let req = try self.request(path: "asr/transcribe", body: body, contentType: "multipart/form-data; boundary=\(boundary)")
-        let data = try await perform(req)
+        let data = try await MetaAPIClient.withDeadline(30) { [self] in try await perform(req) }
         let json = try JSON.parse(data)
         return json["transcript"]?.stringValue ?? ""
     }

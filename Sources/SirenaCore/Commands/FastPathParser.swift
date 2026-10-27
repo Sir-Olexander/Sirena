@@ -81,6 +81,29 @@ public enum FastPathParser {
         guard !t.isEmpty else { return nil }
 
         if let c = control(t, context: context) { return c }
+        if let c = parseSingle(text, t, context: context) { return c }
+        return compound(text, context: context)
+    }
+
+    /// "switch to Chrome and then go to the first tab" → both halves, when every part parses.
+    static func compound(_ raw: String, context: Context) -> ParsedCommand? {
+        let parts = raw.components(separatedBy: try! NSRegularExpression(pattern: "\\s*(?:,\\s*)?\\b(?:and then|then|and|after that)\\b\\s*", options: [.caseInsensitive]))
+        guard parts.count >= 2, parts.count <= 4 else { return nil }
+        var actions: [Action] = []
+        var labels: [String] = []
+        for (i, part) in parts.enumerated() {
+            let t = WakeWord.normalize(part)
+            guard !t.isEmpty else { return nil }
+            guard let parsed = control(t, context: context) ?? parseSingle(part, t, context: context) else { return nil }
+            if parsed.actions.contains(where: { $0.isControl }) && parts.count > 1 && i < parts.count - 1 { return nil }
+            if i > 0 { actions.append(.pause(ms: 350)) }
+            actions += parsed.actions
+            labels.append(parsed.label)
+        }
+        return ParsedCommand(actions, label: labels.joined(separator: " → "))
+    }
+
+    static func parseSingle(_ text: String, _ t: String, context: Context) -> ParsedCommand? {
         if let c = typeCommand(text, t) { return c }
         if let c = messaging(text, t) { return c }
         if let c = numbersClick(t, context: context) { return c }
@@ -96,6 +119,7 @@ public enum FastPathParser {
         if let c = clicks(text, t) { return c }
         return nil
     }
+
 
     // MARK: Pieces
 
@@ -216,7 +240,9 @@ public enum FastPathParser {
         if let m = t.firstMatch("^(?:(?:go|switch|jump|move)\\s+to\\s+|open\\s+|select\\s+|show\\s+)?(?:the\\s+)?(?:tab|tap)\\s+(?:called|named|with|for|that says)\\s+(.+)$") {
             return ParsedCommand(.switchTab(.title(m[1])))
         }
-        if let m = t.firstMatch("^(?:(?:go|switch|jump|move)\\s+to\\s+|open\\s+|select\\s+|show\\s+)?(?:the\\s+)?(.+?)\\s+(?:tab|tap|page)$"), !["next", "previous", "last", "first", "new", "this", "current", "close"].contains(m[1]) {
+        if let m = t.firstMatch("^(?:(?:go|switch|jump|move)\\s+to\\s+|open\\s+|select\\s+|show\\s+)?(?:the\\s+)?(.+?)\\s+(?:tab|tap|page)$"),
+           !["next", "previous", "last", "first", "new", "this", "current", "close"].contains(m[1]),
+           m[1].split(separator: " ").count <= 4, m[1].firstMatch("\\b(go|switch|to|then|and|click|press|scroll)\\b") == nil {
             if Numbers.parse(m[1]) == nil { return ParsedCommand(.switchTo(m[1])) }
         }
         return nil

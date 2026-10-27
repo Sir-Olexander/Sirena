@@ -96,17 +96,73 @@ public final class CommandPipeline {
             }
         }
 
-        // Layer 2: model + direct actions
+        // Layer 2: model + direct actions, in a bounded loop (plan → act → fresh snapshot → …)
         layer = "model"
         latency.layer = settings.privateMode ? "glimmer" : "spark"
-        overlay.showWorking("Thinking…", autoClear: 20)
+        overlay.showWorking("Thinking…", autoClear: 25)
         let t2 = Date()
         let snapshot = await Task.detached(priority: .userInitiated) { [context] in context.snapshot(includeElements: true) }.value
+        var planMs = 0
+        var actMs = 0
+        var roundStart = Date()
+        var lastFailure: String?
+        var pendingShown = false
+        var handedToScreen = false
+        var actionsRun: [String] = []
         do {
-            let plan = try await planner.plan(command: text, snapshot: snapshot)
-            latency.planMs = Int(Date().timeIntervalSince(t2) * 1000)
-            actionText = plan.actions.map { "\($0)" }.joined(separator: "; ")
+            let plan = try await planner.run(command: text, snapshotText: snapshot.promptText()) { [self] actions, round in
+                planMs += Int(Date().timeIntervalSince(roundStart) * 1000)
+                actionsRun.append(actions.map { "\($0)" }.joined(separator: "; "))
+                if let control = actions.first, control.isControl, actions.count == 1 {
+                    onControl?(control)
+                    return .init(summary: control.shortDescription, stop: true, newSnapshotText: nil)
+                }
+                if let goal = actions.compactMap({ a -> String? in if case .computerUse(let g) = a { return g }; return nil }).first {
+                    handedToScreen = true
+                    var lat = latency; lat.planMs = planMs
+                    await self.runLayer3(goal: goal.isEmpty ? text : goal, text: text, latency: &lat)
+                    latency = lat
+                    return .init(summary: "", stop: true, newSnapshotText: nil)
+                }
+                overlay.showWorking(actions.first?.shortDescription ?? "Working", autoClear: 4)
+                let ta = Date()
+                do {
+                    let res = try await executor.execute(actions, snapshot: round == 1 ? snapshot : nil)
+                    actMs += Int(Date().timeIntervalSince(ta) * 1000)
+                    lastFailure = nil
+                    if let p = res.pendingConfirmation {
+                        pending = p
+                        pendingShown = true
+                        overlay.showConfirm(p.message)
+                        return .init(summary: res.summary, stop: true, newSnapshotText: nil)
+                    }
+                    let fresh = await Task.detached(priority: .userInitiated) { [context] in context.snapshot(includeElements: true, maxElements: 100).promptText() }.value
+                    roundStart = Date()
+                    return .init(summary: res.summary, stop: false, newSnapshotText: fresh)
+                } catch let e as ExecutionError {
+                    actMs += Int(Date().timeIntervalSince(ta) * 1000)
+                    lastFailure = e.localizedDescription
+                    let fresh = await Task.detached(priority: .userInitiated) { [context] in context.snapshot(includeElements: true, maxElements: 100).promptText() }.value
+                    roundStart = Date()
+                    return .init(summary: "Failed: \(e.localizedDescription). Try another way, or call need_screen.", stop: false, newSnapshotText: fresh)
+                }
+            }
+            latency.planMs = planMs
+            latency.actMs = actMs
+            actionText = actionsRun.joined(separator: " | ")
             Log.model.info("plan: \(actionText, privacy: .public) tokens in=\(plan.promptTokens ?? 0) out=\(plan.completionTokens ?? 0) reasoning=\(plan.reasoningTokens ?? 0)")
+            if handedToScreen { return }
+            if pendingShown {
+                overlay.setLatency(latency)
+                history.append(HistoryEntry(utterance: text, route: route, layer: layer, action: actionText, result: "awaiting confirmation", latency: latency))
+                return
+            }
+            if let failure = lastFailure {
+                // The model could not recover with direct actions: let the screenshot fallback try.
+                Log.commands.info("model layer ended with a failure (\(failure, privacy: .public)); trying the screen fallback")
+                await runLayer3(goal: text, text: text, latency: &latency)
+                return
+            }
             if plan.actions.isEmpty {
                 let reply = plan.reply ?? "I didn't get that."
                 overlay.showMessage(reply, autoClear: 6)
@@ -114,39 +170,13 @@ public final class CommandPipeline {
                 history.append(HistoryEntry(utterance: text, route: route, layer: layer, action: nil, result: reply, latency: latency))
                 return
             }
-            if plan.actions.count == 1, case .computerUse(let goal) = plan.actions[0] {
-                await runLayer3(goal: goal.isEmpty ? text : goal, text: text, latency: &latency)
-                return
-            }
-            if let control = plan.actions.first, control.isControl, plan.actions.count == 1 {
-                onControl?(control)
-                overlay.showWorking(plan.label, autoClear: 2)
-                history.append(HistoryEntry(utterance: text, route: "control", layer: layer, action: actionText, result: "ok", latency: latency))
-                return
-            }
-            overlay.showWorking(plan.label, autoClear: 3)
-            let t3 = Date()
-            do {
-                let res = try await executor.execute(plan.actions, snapshot: snapshot)
-                latency.actMs = Int(Date().timeIntervalSince(t3) * 1000)
-                await finish(res, label: plan.label, latency: latency)
-                history.append(HistoryEntry(utterance: text, route: route, layer: layer, action: actionText, result: res.summary, latency: latency))
-            } catch ExecutionError.needsScreen(let goal) {
-                await runLayer3(goal: goal, text: text, latency: &latency)
-            } catch {
-                latency.actMs = Int(Date().timeIntervalSince(t3) * 1000)
-                // Layer 3 when a direct action failed on an element.
-                if case ExecutionError.elementNotFound = error {
-                    await runLayer3(goal: text, text: text, latency: &latency)
-                } else {
-                    overlay.showError(error.localizedDescription)
-                    history.append(HistoryEntry(utterance: text, route: route, layer: layer, action: actionText, result: "error: \(error.localizedDescription)", latency: latency))
-                }
-            }
+            overlay.showWorking(plan.label.isEmpty ? "Done" : plan.label, autoClear: 2.5)
+            overlay.setLatency(latency)
+            history.append(HistoryEntry(utterance: text, route: route, layer: layer, action: actionText, result: plan.label, latency: latency))
         } catch {
-            latency.planMs = Int(Date().timeIntervalSince(t2) * 1000)
+            latency.planMs = planMs + Int(Date().timeIntervalSince(roundStart) * 1000)
             overlay.showError(error.localizedDescription)
-            history.append(HistoryEntry(utterance: text, route: route, layer: layer, action: nil, result: "error: \(error.localizedDescription)", latency: latency))
+            history.append(HistoryEntry(utterance: text, route: route, layer: layer, action: actionText, result: "error: \(error.localizedDescription)", latency: latency))
         }
     }
 

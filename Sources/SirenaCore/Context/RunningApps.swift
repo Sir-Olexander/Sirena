@@ -31,6 +31,21 @@ public enum RunningApps {
         "obsidian": "Obsidian", "spotify": "Spotify", "text edit": "TextEdit", "textedit": "TextEdit", "pages": "Pages", "numbers": "Numbers", "keynote": "Keynote",
     ]
 
+    /// English names for system apps, so localized names ("Definições do Sistema") still match what the user says.
+    static let bundleNames: [String: String] = [
+        "com.apple.systempreferences": "System Settings", "com.apple.finder": "Finder", "com.apple.Notes": "Notes", "com.apple.Safari": "Safari",
+        "com.apple.mail": "Mail", "com.apple.MobileSMS": "Messages", "com.apple.iCal": "Calendar", "com.apple.reminders": "Reminders",
+        "com.apple.Music": "Music", "com.apple.Photos": "Photos", "com.apple.Preview": "Preview", "com.apple.TextEdit": "TextEdit",
+        "com.apple.Terminal": "Terminal", "com.apple.calculator": "Calculator", "com.apple.ActivityMonitor": "Activity Monitor",
+        "com.apple.Maps": "Maps", "com.apple.AppStore": "App Store", "com.apple.FaceTime": "FaceTime", "com.apple.Dictionary": "Dictionary",
+        "com.apple.iWork.Pages": "Pages", "com.apple.iWork.Numbers": "Numbers", "com.apple.iWork.Keynote": "Keynote", "com.apple.dt.Xcode": "Xcode",
+        "com.apple.podcasts": "Podcasts", "com.apple.TV": "TV", "com.apple.news": "News", "com.apple.stocks": "Stocks", "com.apple.weather": "Weather",
+        "com.apple.freeform": "Freeform", "com.apple.Home": "Home", "com.apple.findmy": "Find My", "com.apple.Passwords": "Passwords",
+        "com.apple.QuickTimePlayerX": "QuickTime Player", "com.apple.ScreenSharing": "Screen Sharing", "com.apple.systemuiserver": "System UI",
+    ]
+
+    public static func englishName(_ app: AppInfo) -> String { bundleNames[app.bundleId] ?? app.name }
+
     public static func list() -> [AppInfo] {
         NSWorkspace.shared.runningApplications.compactMap { app in
             guard app.activationPolicy == .regular, let name = app.localizedName, let bid = app.bundleIdentifier else { return nil }
@@ -48,11 +63,16 @@ public enum RunningApps {
         let apps = apps ?? list()
         let q = Fuzzy.normalize(query)
         guard !q.isEmpty else { return nil }
-        if let alias = aliases[q] {
-            if let exact = apps.first(where: { $0.name.caseInsensitiveCompare(alias) == .orderedSame }) { return exact }
-            if let near = Fuzzy.best(alias, in: apps, name: \.name, threshold: 0.75) { return near.item }
+        // Each app can be named by its localized name or its English name.
+        let candidates: [(AppInfo, String)] = apps.flatMap { a in
+            let e = englishName(a)
+            return e.caseInsensitiveCompare(a.name) == .orderedSame ? [(a, a.name)] : [(a, a.name), (a, e)]
         }
-        if let b = Fuzzy.best(q, in: apps, name: \.name, threshold: 0.62) { return b.item }
+        if let alias = aliases[q] {
+            if let exact = candidates.first(where: { $0.1.caseInsensitiveCompare(alias) == .orderedSame }) { return exact.0 }
+            if let near = Fuzzy.best(alias, in: candidates, name: \.1, threshold: 0.75) { return near.item.0 }
+        }
+        if let b = Fuzzy.best(q, in: candidates, name: \.1, threshold: 0.62) { return b.item.0 }
         // Try matching against the last word of the bundle id (e.g. "com.tinyspeck.slackmacgap")
         if let b = Fuzzy.best(q, in: apps, name: { $0.bundleId.split(separator: ".").last.map(String.init) ?? "" }, threshold: 0.8) { return b.item }
         return nil
@@ -125,5 +145,19 @@ public enum RunningApps {
 
     public static func windowTitles(of info: AppInfo) -> [String] {
         AXElement.application(pid: info.pid).windows.compactMap { $0.title }.filter { !$0.isEmpty }
+    }
+}
+
+extension String {
+    func components(separatedBy regex: NSRegularExpression) -> [String] {
+        let ns = self as NSString
+        var parts: [String] = []
+        var last = 0
+        for m in regex.matches(in: self, range: NSRange(location: 0, length: ns.length)) {
+            parts.append(ns.substring(with: NSRange(location: last, length: m.range.location - last)))
+            last = m.range.location + m.range.length
+        }
+        parts.append(ns.substring(from: last))
+        return parts.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 }

@@ -84,10 +84,12 @@ final class RealtimeSession: NSObject, URLSessionWebSocketDelegate {
     }
 
     private func fail(_ message: String) {
-        guard !isClosed else { return }
-        isClosed = true
-        task.cancel(with: .abnormalClosure, reason: nil)
-        onEvent?(.disconnected(code: -1, reason: message), self)
+        queue.async { [self] in
+            guard !isClosed else { return }
+            isClosed = true
+            task.cancel(with: .abnormalClosure, reason: nil)
+            onEvent?(.disconnected(code: -1, reason: message), self)
+        }
     }
 
     private func receiveLoop() {

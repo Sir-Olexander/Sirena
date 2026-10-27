@@ -95,6 +95,15 @@ final class FastPathParserTests: XCTestCase {
         XCTAssertEqual(parse("open github dot com"), [.openURL("github dot com")])
     }
 
+    func testCompoundCommands() {
+        let a = parse("switch to Chrome and then go to the first tab")
+        XCTAssertEqual(a, [.switchTo("chrome"), .pause(ms: 350), .switchTab(.first)])
+        XCTAssertEqual(parse("scroll down and click send"), [.scroll(.down, .medium), .pause(ms: 350), .clickElement("send")])
+        XCTAssertEqual(parse("click save and continue"), [.clickElement("save and continue")])
+        XCTAssertEqual(parse("type see you then"), [.typeText("see you then")])
+        XCTAssertNil(parse("switch to Chrome go to the first tab"))
+    }
+
     func testUnknownFallsThrough() {
         XCTAssertNil(parse("what's the weather like"))
         XCTAssertNil(parse("summarize this page for me"))

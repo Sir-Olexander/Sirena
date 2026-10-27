@@ -35,7 +35,10 @@ public final class ListeningController {
         self.settings = settings; self.overlay = overlay; self.context = context; self.pipeline = pipeline; self.dictation = dictation
         self.transcriber = transcriber; self.audio = audio; self.fallback = fallback; self.history = history; self.numbers = numbers
 
-        transcriber.keywordsProvider = { [weak self] in self?.context.keywords() ?? ["Sirena"] }
+        transcriber.keywordsProvider = { [weak self] in
+            guard let self else { return ["Sirena"] }
+            return self.context.keywords(snapshot: self.context.snapshot(includeElements: false))
+        }
         transcriber.onEvent = { [weak self] e in self?.handle(e) }
         fallback?.keywordsProvider = { [weak self] in self?.context.keywords() ?? ["Sirena"] }
         fallback?.onEvent = { [weak self] e in self?.handle(e) }

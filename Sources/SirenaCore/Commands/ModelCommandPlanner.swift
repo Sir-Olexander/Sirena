@@ -31,6 +31,7 @@ public final class ModelCommandPlanner {
     - If the request needs visual understanding that the element list cannot give (the element is not listed, positions matter, images, canvas apps), call need_screen with a concise goal so the screenshot fallback can take over. Only do this when direct tools cannot work.
     - If the user is not asking for an action (a question, a comment), reply in one short sentence instead of calling tools.
     - Keep tool arguments minimal and exact. Labels must be copied from the element list when they exist.
+    - When several steps are needed and the later steps do not depend on seeing the new screen (activate_app then press_keys, focus then type_text), emit all of them in one turn, in order. After your tool calls run you receive their results and a fresh snapshot; continue only if the command is not finished, otherwise answer with a few words and no tool calls.
     """
 
     static let tools: [ChatTool] = [
@@ -61,8 +62,12 @@ public final class ModelCommandPlanner {
     ]
 
     public func plan(command: String, snapshot: ScreenSnapshot) async throws -> CommandPlan {
+        try await plan(command: command, snapshotText: snapshot.promptText())
+    }
+
+    public func plan(command: String, snapshotText: String) async throws -> CommandPlan {
         guard let client = clientProvider() else { throw APIError.missingKey }
-        let user = "Screen snapshot:\n\(snapshot.promptText())\n\nSpoken command: \"\(command)\""
+        let user = "Screen snapshot:\n\(snapshotText)\n\nSpoken command: \"\(command)\""
         let req = ChatRequest(model: modelName(), messages: [.system(ModelCommandPlanner.systemPrompt), .user(user)],
                               tools: ModelCommandPlanner.tools, reasoning_effort: client.isLocal ? nil : "minimal",
                               max_tokens: 1800, parallel_tool_calls: true, prompt_cache_key: "sirena-commands")
@@ -89,6 +94,67 @@ public final class ModelCommandPlanner {
         plan.label = plan.actions.first?.shortDescription ?? "Working"
         if plan.actions.count > 1, let first = plan.actions.first, let last = plan.actions.last, !(last.isControl) {
             plan.label = "\(first.shortDescription) → \(last.shortDescription)"
+        }
+        return plan
+    }
+
+    public struct RoundOutcome {
+        public var summary: String
+        public var stop: Bool
+        public var newSnapshotText: String?
+        public init(summary: String, stop: Bool, newSnapshotText: String?) { self.summary = summary; self.stop = stop; self.newSnapshotText = newSnapshotText }
+    }
+
+    /// Bounded agent loop: plan → execute → feed results and a fresh snapshot back → … (max `maxRounds`).
+    /// `executeRound` runs one round's actions; returning `stop` ends the loop (confirmation pending, control action, handover).
+    public func run(command: String, snapshotText: String, maxRounds: Int = 4,
+                    executeRound: ([Action], Int) async throws -> RoundOutcome) async throws -> CommandPlan {
+        guard let client = clientProvider() else { throw APIError.missingKey }
+        var messages: [ChatMessage] = [.system(ModelCommandPlanner.systemPrompt),
+                                       .user("Screen snapshot:\n\(snapshotText)\n\nSpoken command: \"\(command)\"")]
+        var plan = CommandPlan(actions: [], label: "", reply: nil, promptTokens: 0, completionTokens: 0, reasoningTokens: 0)
+        for round in 1...max(1, maxRounds) {
+            let req = ChatRequest(model: modelName(), messages: messages, tools: ModelCommandPlanner.tools,
+                                  reasoning_effort: client.isLocal ? nil : "minimal", max_tokens: 1800,
+                                  parallel_tool_calls: true, prompt_cache_key: "sirena-commands")
+            let resp = try await client.chat(req)
+            plan.promptTokens! += resp.usage?.prompt_tokens ?? 0
+            plan.completionTokens! += resp.usage?.completion_tokens ?? 0
+            plan.reasoningTokens! += resp.usage?.completion_tokens_details?.reasoning_tokens ?? 0
+            let calls = resp.toolCalls
+            if calls.isEmpty {
+                var reply = resp.text?.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let text = reply, text.hasPrefix("{"), let json = try? JSON.parse(text), let name = json["name"]?.stringValue {
+                    let recovered = ModelCommandPlanner.actions(for: name, args: json["arguments"] ?? json["parameters"] ?? .object([:]))
+                    if !recovered.isEmpty {
+                        plan.actions += recovered
+                        reply = nil
+                        let outcome = try await executeRound(recovered, round)
+                        plan.label = outcome.summary
+                        return plan
+                    }
+                }
+                if round == 1 { plan.reply = reply; plan.label = reply ?? "No action" }
+                else if plan.label.isEmpty { plan.label = reply ?? "Done" }
+                return plan
+            }
+            let actions = ModelCommandPlanner.foldConfirmations(calls.flatMap { ModelCommandPlanner.actions(for: $0.function.name, args: $0.argumentsJSON) })
+            plan.actions += actions
+            let outcome = try await executeRound(actions, round)
+            plan.label = outcome.summary.isEmpty ? (actions.first?.shortDescription ?? "Working") : outcome.summary
+            if outcome.stop || round == maxRounds { return plan }
+            // Feed the results back for the next round.
+            if let assistant = resp.message { messages.append(assistant) }
+            for (i, call) in calls.enumerated() {
+                let isLast = i == calls.count - 1
+                var content = "Done."
+                if isLast {
+                    content = "Result: \(outcome.summary.isEmpty ? "done" : outcome.summary)"
+                    if let snap = outcome.newSnapshotText { content += "\n\nScreen snapshot now:\n\(snap)" }
+                    content += "\n\nIf the spoken command is fully carried out, answer in a few words with no tool calls. Otherwise continue with the next tool calls."
+                }
+                messages.append(.tool(id: call.id, content: content))
+            }
         }
         return plan
     }

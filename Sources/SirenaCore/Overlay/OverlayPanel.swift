@@ -22,7 +22,7 @@ public final class OverlayPanel: NSPanel {
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         anchor = settings.overlayPosition ?? CGPoint(x: screen.midX, y: screen.minY + 24)
         super.init(contentRect: NSRect(x: anchor.x - 20, y: anchor.y, width: 40, height: 40),
-                   styleMask: [.borderless, .nonactivatingPanel, .utilityWindow], backing: .buffered, defer: false)
+                   styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         isFloatingPanel = true
         level = .screenSaver
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
