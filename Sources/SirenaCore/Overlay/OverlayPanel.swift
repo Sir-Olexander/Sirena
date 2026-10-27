@@ -1,16 +1,67 @@
 import AppKit
 import SwiftUI
 
-/// Hosting view that lets the window be dragged by its background and accepts the first click.
-final class OverlayHostingView<Content: View>: NSHostingView<Content> {
-    override var mouseDownCanMoveWindow: Bool { true }
+/// Content view of the overlay: takes every mouse event itself so a click toggles Sirena, a drag moves the panel,
+/// and the Yes / Cancel areas of the confirmation card work without relying on key-window focus.
+final class OverlayContainerView: NSView {
+    weak var model: OverlayModel?
+    var onDragEnded: (() -> Void)?
+    let hosting: NSView
+    private var dragStartMouse: CGPoint?
+    private var dragStartOrigin: CGPoint = .zero
+    private var dragged = false
+
+    init(hosting: NSView) {
+        self.hosting = hosting
+        super.init(frame: .zero)
+        hosting.frame = bounds
+        hosting.autoresizingMask = [.width, .height]
+        addSubview(hosting)
+    }
+    required init?(coder: NSCoder) { nil }
+
+    override var isFlipped: Bool { true }   // same origin as SwiftUI coordinates
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let local = convert(point, from: superview)
+        return bounds.contains(local) ? self : nil
+    }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    override func mouseDown(with event: NSEvent) {
+        dragStartMouse = NSEvent.mouseLocation
+        dragStartOrigin = window?.frame.origin ?? .zero
+        dragged = false
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let start = dragStartMouse, let window else { return }
+        let now = NSEvent.mouseLocation
+        let dx = now.x - start.x, dy = now.y - start.y
+        if !dragged, abs(dx) < 3, abs(dy) < 3 { return }
+        dragged = true
+        window.setFrameOrigin(CGPoint(x: dragStartOrigin.x + dx, y: dragStartOrigin.y + dy))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        defer { dragStartMouse = nil }
+        if dragged { onDragEnded?(); return }
+        guard let model else { return }
+        let p = convert(event.locationInWindow, from: nil)
+        if case .confirm = model.mode {
+            if let yes = model.confirmFrames["yes"], yes.insetBy(dx: -6, dy: -6).contains(p) { model.confirm(true); return }
+            if let no = model.confirmFrames["cancel"], no.insetBy(dx: -6, dy: -6).contains(p) { model.confirm(false); return }
+            return
+        }
+        model.toggle()
+    }
 }
 
 /// A floating, non-activating panel that never becomes key, floats above full-screen apps, and lives on every Space.
 public final class OverlayPanel: NSPanel {
     private let model: OverlayModel
-    private var hosting: OverlayHostingView<OverlayView>!
+    private var hosting: NSHostingView<OverlayView>!
+    private var container: OverlayContainerView!
     private var cancellable: Any?
     private var anchor: CGPoint   // bottom-center of the pill in screen coordinates
     private let settings: Settings
@@ -30,14 +81,16 @@ public final class OverlayPanel: NSPanel {
         backgroundColor = .clear
         hasShadow = false
         hidesOnDeactivate = false
-        isMovableByWindowBackground = true
+        isMovableByWindowBackground = false
         isReleasedWhenClosed = false
         becomesKeyOnlyIfNeeded = true
         animationBehavior = .utilityWindow
-        hosting = OverlayHostingView(rootView: OverlayView(model: model))
-        hosting.translatesAutoresizingMaskIntoConstraints = true
-        contentView = hosting
-        NotificationCenter.default.addObserver(self, selector: #selector(didMove), name: NSWindow.didMoveNotification, object: self)
+        acceptsMouseMovedEvents = false
+        hosting = NSHostingView(rootView: OverlayView(model: model))
+        container = OverlayContainerView(hosting: hosting)
+        container.model = model
+        container.onDragEnded = { [weak self] in self?.didMove() }
+        contentView = container
         NotificationCenter.default.addObserver(self, selector: #selector(screenChanged), name: NSApplication.didChangeScreenParametersNotification, object: nil)
         cancellable = model.objectWillChange.sink { [weak self] _ in
             DispatchQueue.main.async { self?.fitToContent(animated: true) }
@@ -76,14 +129,11 @@ public final class OverlayPanel: NSPanel {
         NSScreen.screens.first { $0.frame.contains(CGPoint(x: anchor.x, y: anchor.y + 1)) } ?? NSScreen.main
     }
 
-    @objc private func didMove() {
-        // Dragging changes the anchor (bottom-center).
+    /// Dragging changes the anchor (bottom-center).
+    private func didMove() {
         let f = frame
-        let newAnchor = CGPoint(x: f.midX, y: f.minY)
-        if abs(newAnchor.x - anchor.x) > 0.5 || abs(newAnchor.y - anchor.y) > 0.5 {
-            anchor = newAnchor
-            settings.overlayPosition = anchor
-        }
+        anchor = CGPoint(x: f.midX, y: f.minY)
+        settings.overlayPosition = anchor
     }
 
     @objc private func screenChanged() {

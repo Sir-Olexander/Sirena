@@ -29,6 +29,8 @@ public final class OverlayModel: ObservableObject {
     @Published public private(set) var privateListening = false
     /// True while the pill is expanded after recent activity.
     @Published public private(set) var isActive = false
+    /// Frames of the Yes / Cancel areas in the overlay's coordinate space (set by the view, read by the panel).
+    public var confirmFrames: [String: CGRect] = [:]
 
     public var onToggle: (() -> Void)?
     public var onConfirm: ((Bool) -> Void)?

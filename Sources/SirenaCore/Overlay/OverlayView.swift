@@ -30,6 +30,8 @@ public struct OverlayView: View {
         .animation(.easeInOut(duration: 0.25), value: model.isActive)
         .animation(.easeInOut(duration: 0.2), value: model.isDictating)
         .fixedSize()
+        .coordinateSpace(name: "overlay")
+        .onPreferenceChange(ConfirmFramesKey.self) { frames in model.confirmFrames = frames }
     }
 
     // MARK: - States
@@ -41,7 +43,6 @@ public struct OverlayView: View {
             .overlay(Circle().stroke(Color.white.opacity(0.35), lineWidth: 1))
             .padding(8)
             .contentShape(Rectangle())
-            .onTapGesture { model.toggle() }
             .help("Click to turn Sirena on")
     }
 
@@ -56,7 +57,6 @@ public struct OverlayView: View {
         .overlay(Capsule().stroke(Color.white.opacity(0.15), lineWidth: 1))
         .padding(6)
         .contentShape(Rectangle())
-        .onTapGesture { model.toggle() }
     }
 
     private var awakeBody: some View {
@@ -101,7 +101,6 @@ public struct OverlayView: View {
         .overlay(Capsule().stroke(accent.opacity(0.55), lineWidth: 1))
         .shadow(color: .black.opacity(0.35), radius: 10, y: 3)
         .contentShape(Capsule())
-        .onTapGesture { model.toggle() }
     }
 
     private var pillColor: Color {
@@ -190,13 +189,21 @@ public struct OverlayView: View {
     }
 
     private func confirmButton(_ title: String, systemImage: String, tint: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .font(.system(size: 12 * scale, weight: .semibold))
-                .foregroundColor(.white)
-                .padding(.horizontal, 12 * scale).padding(.vertical, 6 * scale)
-                .background(Capsule().fill(tint))
-        }
-        .buttonStyle(.plain)
+        Label(title, systemImage: systemImage)
+            .font(.system(size: 12 * scale, weight: .semibold))
+            .foregroundColor(.white)
+            .padding(.horizontal, 12 * scale).padding(.vertical, 6 * scale)
+            .background(Capsule().fill(tint))
+            .background(GeometryReader { g in
+                Color.clear.preference(key: ConfirmFramesKey.self, value: [title == "Yes" ? "yes" : "cancel": g.frame(in: .named("overlay"))])
+            })
+    }
+}
+
+
+struct ConfirmFramesKey: PreferenceKey {
+    static var defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { $1 })
     }
 }
