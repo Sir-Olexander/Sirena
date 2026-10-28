@@ -110,11 +110,11 @@ public enum BrowserControl {
         tell application "\(name)"
             if (count of windows) = 0 then return ""
             \(windowSelector(kind: kind, wanted: visibleWindowTitle(app)))
-            set out to (\(activeExpr) as text) & tab & (id of w as text) & tab & ((count of windows) as text)
+            set out to (\(activeExpr) as text) & (character id 9) & (id of w as text) & (character id 9) & ((count of windows) as text)
             set i to 0
             repeat with t in tabs of w
                 set i to i + 1
-                set out to out & linefeed & (\(titleOf)) & tab & (URL of t)
+                set out to out & linefeed & (\(titleOf)) & (character id 9) & (URL of t)
                 if i ≥ 40 then exit repeat
             end repeat
             return out
@@ -180,9 +180,9 @@ public enum BrowserControl {
             set n to count of tabs of w
             set p to \(getActive)
             set i to \(expr)
-            if i < 1 or i > n then return "none" & tab & (n as text)
+            if i < 1 or i > n then return "none" & (character id 9) & (n as text)
             \(setActive)
-            return (p as text) & tab & (i as text) & tab & (\(activeTitle))
+            return (p as text) & (character id 9) & (i as text) & (character id 9) & (\(activeTitle))
         end tell
         """
         guard let out = run(source), !out.isEmpty else { return .unavailable }

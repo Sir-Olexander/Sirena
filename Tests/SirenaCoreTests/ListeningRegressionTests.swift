@@ -277,5 +277,11 @@ final class ResultLinkTests: XCTestCase {
         let plain = PageLinks.ordered([link("Home", y: 10), link("Read the full story", y: 200, url: "https://a.b/s"),
                                        link("Read the full story again", y: 260, url: "https://a.b/s#top")], visibleIn: nil)
         XCTAssertEqual(plain.map(\.title), ["Read the full story"])
+        // Chrome flattens the frames of links outside the visible part: reading order decides, starting on screen.
+        func flat(_ t: String, y: CGFloat) -> PageLink { PageLink(title: t, url: nil, element: nil, frame: CGRect(x: 100, y: y, width: 300, height: 0), isHeadingLink: true) }
+        let scrolled = PageLinks.ordered([flat("Result one above", y: 25), link("Result two on screen", y: 400, heading: true),
+                                          flat("Result three below", y: 843), flat("Result four below", y: 843)],
+                                         visibleIn: CGRect(x: 0, y: 25, width: 1200, height: 818))
+        XCTAssertEqual(scrolled.map(\.title), ["Result two on screen", "Result three below", "Result four below"])
     }
 }

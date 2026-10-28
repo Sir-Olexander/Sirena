@@ -198,6 +198,21 @@ public enum SelfTests {
             lines.append("  \(i + 1). \(l.title.prefix(70))\(l.isHeadingLink ? "" : " (no heading)") — \(l.url?.prefix(60) ?? "?")")
         }
         lines.append("skip links in the list: \(links.filter { PageLinks.isSkipLink($0.title) }.count) (expect 0)")
+        // Every link of the page, to see what the filter dropped.
+        if let win = AX.frontWindow(pid: chrome.pid), let web = TextExtractor.findFirst(in: win, maxVisited: 4000, where: { $0.role == "AXWebArea" }) {
+            var all: [String] = []
+            var queue = [web]; var head = 0
+            while head < queue.count, head < 8000 {
+                let el = queue[head]; head += 1
+                if el.role == "AXLink" {
+                    if all.count < 40 { all.append("    link “\(el.label.prefix(50))” heading=\(PageLinks.findHeading(in: el) != nil) parentHeading=\(el.parent?.role == "AXHeading") y=\(Int(el.frame?.minY ?? -1))") }
+                    continue
+                }
+                queue += el.children
+            }
+            lines.append("first 40 links of the page:")
+            lines += all
+        }
         let executor = ActionExecutor(context: ScreenContext(), numbers: NumbersMode(), inserter: .shared)
         let before = BrowserControl.info(for: chrome)?.activeTab?.url ?? ""
         let r = try? await executor.execute([.openResult(2)], snapshot: nil)
