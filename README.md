@@ -148,6 +148,8 @@ open -n build/Sirena.app --args --selftest dictation /tmp/dictation.txt         
 open -n build/Sirena.app --args --selftest speculation /tmp/speculation.txt     # model commands with and without the early start
 open -n build/Sirena.app --args --selftest echo /tmp/echo.txt                   # plays a sentence aloud; what the recognizer hears with/without the echo gate
 open -n build/Sirena.app --args --selftest players /tmp/players.txt             # apps playing sound and their output devices
+open -n build/Sirena.app --args --selftest echo-sim /tmp/echo-sim.txt           # simulated music + your voice (nothing played): recognizer with/without
+swift run -c release sirena-cli echo-bench                                        # echo canceller + gate speed and scores on simulated music
 ```
 
 Set `SIRENA_DEBUG_DUMP=/some/dir` to write every model request and response body there.
@@ -209,12 +211,14 @@ get noise reduction too.
 
 Apple's echo cancellation only removes sound Sirena plays herself, and it is off whenever the microphone in use
 is not the system default. So while another app plays sound and Sirena listens (awake or waiting for "Hey
-Sirena"), she captures what the Mac plays (ScreenCaptureKit, audio only, her own voice left out) and compares the
-microphone with it every 10 ms: stretches where the microphone only hears the speakers reach the recognizer as
-silence, so lyrics and videos are neither typed nor taken for commands. Your voice over the music passes. It must
-be somewhat louder in the microphone than the speakers (6 dB was enough in tests on a MacBook Air); with loud music,
-speak up or pause it. What she learns about each microphone and speaker pair is kept. macOS shows its
-screen-recording indicator while this runs. "Ignore music and videos playing on this Mac" in the menu turns it off.
+Sirena"), she captures what the Mac plays (ScreenCaptureKit, audio only, her own voice left out). An echo
+canceller learns how the speakers reach the microphone and subtracts the music from it (about 19 dB less in
+tests); what is left is compared with what is playing every 10 ms, and stretches that hold only leftover music
+reach the recognizer as silence, so lyrics and videos are neither typed nor taken for commands. Your voice passes,
+cleaned of most of the music, even when the music is louder than you in the microphone (12 dB louder in tests:
+“Sirena, scroll down” still came through). The canceller needs a few seconds of music to learn the room; what she
+learns about each microphone and speaker pair is kept. While music plays, speech reaches the recognizer about
+0.15 s later. macOS shows its screen-recording indicator while this runs. "Ignore music and videos playing on this Mac" in the menu turns it off.
 With headphones nothing reaches the microphone and nothing needs to be done.
 
 ### On-device wake word
