@@ -27,10 +27,22 @@ public final class ComputerUseAgent {
         var scaleY: CGFloat { pointSize.height / pixelSize.height }
     }
 
-    public func run(goal: String, context: String, maxSteps: Int = 8) async throws -> String {
+    /// What a run achieved, so a look at the screen that changed nothing is not reported as success.
+    public struct Outcome: Equatable {
+        public var text: String
+        /// Clicks, keys, typing, scrolls performed on the Mac.
+        public var actions: Int
+        /// nil when the agent finished; otherwise why it stopped ("declined", "time limit", "step limit").
+        public var stopped: String?
+        public init(text: String, actions: Int, stopped: String? = nil) { self.text = text; self.actions = actions; self.stopped = stopped }
+    }
+
+    public func run(goal: String, context: String, maxSteps: Int = 6, timeLimit: TimeInterval = 30) async throws -> Outcome {
         guard let client = clientProvider() else { throw APIError.missingKey }
         guard CGPreflightScreenCaptureAccess() else { throw ExecutionError.failed("Screen Recording permission is needed for this") }
         onStatus?("Looking at the screen…")
+        let started = Date()
+        var performed = 0
         var shot = try await screenshot()
         var input: [JSON] = [
             .object(["role": "user", "content": .array([
@@ -47,6 +59,8 @@ public final class ComputerUseAgent {
         var lastTyped: String?
         for step in 1...maxSteps {
             try Task.checkCancellation()
+            let elapsed = Date().timeIntervalSince(started)
+            if elapsed > timeLimit { return Outcome(text: "Stopped after \(Int(timeLimit)) s", actions: performed, stopped: "time limit") }
             let body: JSON = .object([
                 "model": .string(modelName()),
                 "input": .array(input),
@@ -57,7 +71,13 @@ public final class ComputerUseAgent {
                 "parallel_tool_calls": false,
                 "include": ["reasoning.encrypted_content"],
             ])
-            let resp = try await client.responses(body)
+            let resp: JSON
+            do {
+                // The whole run has a wall-clock budget; one slow call cannot eat it.
+                resp = try await MetaAPIClient.withDeadline(max(8, timeLimit - elapsed + 5)) { try await client.responses(body) }
+            } catch APIError.timeout {
+                return Outcome(text: "Stopped after \(Int(timeLimit)) s", actions: performed, stopped: "time limit")
+            }
             guard let output = resp["output"]?.arrayValue else { throw APIError.decoding("no output") }
             // With store:false the history is replayed; reasoning items can only be replayed with their encrypted content.
             input += output.filter { item in
@@ -65,38 +85,44 @@ public final class ComputerUseAgent {
             }
             guard let call = output.first(where: { $0["type"]?.stringValue == "computer_call" }) else {
                 let text = ComputerUseAgent.assistantText(output) ?? "Done"
-                return text
+                return Outcome(text: text, actions: performed)
             }
             // Safety checks
             var acknowledged: [JSON] = []
             let actions = call["actions"]?.arrayValue ?? (call["action"].map { [$0] } ?? [])
             if let checks = call["pending_safety_checks"]?.arrayValue, !checks.isEmpty {
-                // Say exactly what is about to happen; the safety warning is only the second line.
                 let warning = checks.compactMap { $0["message"]?.stringValue }.joined(separator: " ")
-                let question = ComputerUseAgent.describe(actions, shot: shot) + "?"
-                let ok = await confirm?(question, warning.isEmpty ? nil : "Safety check: \(warning)") ?? false
-                if !ok { return "Stopped before: \(question.dropLast())" }
+                if ComputerUseAgent.isHarmless(actions, shot: shot, typedBefore: typedSinceLastCheck) {
+                    // Opening a folder, clicking a tab, scrolling: nothing to confirm (the irreversible steps still ask).
+                    Log.commands.notice("safety check acknowledged for a harmless step: \(warning, privacy: .public)")
+                } else {
+                    // Say exactly what is about to happen; the safety warning is only the second line.
+                    let question = ComputerUseAgent.describe(actions, shot: shot) + "?"
+                    let ok = await confirm?(question, warning.isEmpty ? nil : "Safety check: \(warning)") ?? false
+                    if !ok { return Outcome(text: "Stopped before: \(question.dropLast())", actions: performed, stopped: "declined") }
+                }
                 acknowledged = checks
             }
             for action in actions {
                 try Task.checkCancellation()
                 let type = action["type"]?.stringValue ?? ""
-                onStatus?("Step \(step): \(type)")
+                onStatus?("Step \(step) of \(maxSteps): \(ComputerUseAgent.describe([action], shot: shot))")
                 if type == "keypress", typedSinceLastCheck, let keys = action["keys"]?.arrayValue?.compactMap({ $0.stringValue }),
                    keys.contains(where: { ["enter", "return"].contains($0.lowercased()) }) {
                     let app = RunningApps.frontmost()?.name
                     let question = (lastTyped.map { "Type “\(ConfirmationText.short($0))” and press Enter" } ?? "Press Enter") + (app.map { " in \($0)" } ?? "") + "?"
                     let ok = await confirm?(question, "This usually sends or submits.") ?? false
-                    if !ok { return "Cancelled before pressing Enter" }
+                    if !ok { return Outcome(text: "Cancelled before pressing Enter", actions: performed, stopped: "declined") }
                     typedSinceLastCheck = false
                 }
                 if type == "click", case let target = ScreenItem.describe(at: ComputerUseAgent.point(action, shot: shot)),
                    let label = target.label, Action.irreversibleLabel(label) {
                     let question = "Click \(target.phrase) in \(target.place)?"
                     let ok = await confirm?(question, nil) ?? false
-                    if !ok { return "Cancelled before clicking “\(label)”" }
+                    if !ok { return Outcome(text: "Cancelled before clicking “\(label)”", actions: performed, stopped: "declined") }
                 }
                 try perform(action, shot: shot)
+                if !["screenshot", "wait"].contains(type) { performed += 1 }
                 if type == "type" { typedSinceLastCheck = true; lastTyped = action["text"]?.stringValue }
                 usleep(250_000)
             }
@@ -109,7 +135,36 @@ public final class ComputerUseAgent {
                 "output": .object(["type": "computer_screenshot", "image_url": .string("data:image/png;base64,\(shot.png.base64EncodedString())")]),
             ]))
         }
-        return "Stopped after \(maxSteps) steps"
+        return Outcome(text: "Stopped after \(maxSteps) steps", actions: performed, stopped: "step limit")
+    }
+
+    /// A step that needs no confirmation even when the service flags it: clicks on items whose label does not
+    /// send, delete, buy or call; scrolling; moving; typing; keys other than Enter after typing or ⌘⌫ / ⌘Q.
+    static func isHarmless(_ actions: [JSON], shot: Shot, typedBefore: Bool) -> Bool {
+        var typed = typedBefore
+        for a in actions {
+            switch a["type"]?.stringValue ?? "" {
+            case "click", "double_click", "triple_click":
+                if let label = ScreenItem.describe(at: point(a, shot: shot)).label, Action.irreversibleLabel(label) { return false }
+            case "scroll", "move", "mouse_move", "wait", "screenshot", "drag":
+                break
+            case "type":
+                typed = true
+            case "keypress", "key":
+                let keys = (a["keys"]?.arrayValue?.compactMap { $0.stringValue } ?? []).map { $0.lowercased() }
+                if !isHarmlessKeys(keys, typed: typed) { return false }
+            default:
+                return false
+            }
+        }
+        return true
+    }
+
+    static func isHarmlessKeys(_ keys: [String], typed: Bool) -> Bool {
+        let hasCmd = keys.contains { ["cmd", "command", "meta", "super"].contains($0) }
+        if keys.contains(where: { ["enter", "return"].contains($0) }) && typed { return false }
+        if hasCmd && keys.contains(where: { ["delete", "backspace", "q", "w"].contains($0) }) { return false }
+        return true
     }
 
     static func point(_ action: JSON, shot: Shot) -> CGPoint {

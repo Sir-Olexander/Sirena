@@ -41,7 +41,7 @@ public final class CommandPipeline {
         self.overlay = overlay; self.history = history; self.settings = settings; self.shortcuts = shortcuts; self.notes = notes
         executor.computerUseHandler = { [weak self] goal in
             guard let self else { return "" }
-            return try await self.runComputerUse(goal: goal, command: goal)
+            return try await self.runComputerUse(goal: goal, command: goal).text
         }
         computerUse.onStatus = { [weak self] s in self?.overlay.showWorking(s, autoClear: 30) }
         computerUse.confirm = { [weak self] message, detail in
@@ -462,15 +462,49 @@ public final class CommandPipeline {
 
     // MARK: - Screen fallback
 
+    /// Words that say nothing about what to do on the screen.
+    static let vagueWords: Set<String> = ["this", "that", "these", "those", "one", "ones", "here", "there", "it", "more", "again", "resume",
+                                          "continue", "yes", "no", "ok", "okay", "the", "a", "an", "do", "go", "on", "to", "please", "now",
+                                          "isto", "isso", "este", "esta", "esse", "essa", "aqui", "ali", "mais", "o", "a", "um", "uma"]
+
+    /// The screenshot fallback costs 10–30 s: only for a request that says what to do (three words or more,
+    /// not only "this one", "more", "resume").
+    static func screenFallbackAllowed(_ command: String) -> Bool {
+        let words = FastPathParser.normalize(command).split(separator: " ").map(String.init)
+        guard words.count >= 3 else { return false }
+        return words.contains { !vagueWords.contains($0) }
+    }
+
+    /// A request that asks to look rather than to act: a description is then the answer.
+    static func asksToLook(_ command: String) -> Bool {
+        let t = FastPathParser.normalize(command)
+        return CommandShape.isQuestion(command, t) || t.firstMatch("^(?:describe|tell me|read|look at|what|which|how many|show me what|explain|summari[sz]e|o que|descreve|lê)\\b") != nil
+    }
+
     private func runLayer3(goal: String, text: String, latency: inout LatencyReport) async {
         latency.layer = "screen"
+        guard CommandPipeline.screenFallbackAllowed(text) else {
+            overlay.showMessage("Say what to do there, for example “click Send” or “open the first conversation”", autoClear: 5)
+            log(text, layer: "screen", actions: nil, result: "error: too vague for the screen fallback", latency: latency, failed: true)
+            return
+        }
         let t = Date()
         do {
-            let summary = try await runComputerUse(goal: goal, command: text)
+            let outcome = try await runComputerUse(goal: goal, command: text)
             latency.actMs = Int(Date().timeIntervalSince(t) * 1000)
-            overlay.showMessage(summary, autoClear: 5)
             overlay.setLatency(latency)
-            log(text, layer: "screen", actions: [.computerUse(goal: goal)], result: summary, latency: latency)
+            if let reason = outcome.stopped {
+                overlay.showMessage(outcome.text, autoClear: 5)
+                log(text, layer: "screen", actions: [.computerUse(goal: goal)], result: "Stopped (\(reason)): \(outcome.text)", latency: latency,
+                    failed: reason != "declined")
+            } else if outcome.actions == 0 && !CommandPipeline.asksToLook(text) {
+                // It only looked: say so instead of reporting a description as if the command had run.
+                overlay.showMessage("I couldn't do that: \(outcome.text.prefix(140))", autoClear: 7)
+                log(text, layer: "screen", actions: [.computerUse(goal: goal)], result: "error: nothing done — \(outcome.text)", latency: latency, failed: true)
+            } else {
+                overlay.showMessage(outcome.text, autoClear: 5)
+                log(text, layer: "screen", actions: [.computerUse(goal: goal)], result: outcome.text, latency: latency)
+            }
         } catch {
             latency.actMs = Int(Date().timeIntervalSince(t) * 1000)
             if CommandPipeline.isCancellation(error) {
@@ -490,7 +524,7 @@ public final class CommandPipeline {
         return (error as NSError).domain == "Swift.CancellationError"
     }
 
-    private func runComputerUse(goal: String, command: String) async throws -> String {
+    private func runComputerUse(goal: String, command: String) async throws -> ComputerUseAgent.Outcome {
         isScreenAgentRunning = true
         defer { isScreenAgentRunning = false }
         overlay.showWorking("Looking at the screen…", autoClear: 60)

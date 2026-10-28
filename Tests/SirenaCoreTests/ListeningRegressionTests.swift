@@ -335,3 +335,26 @@ final class DictationSpeedTests: XCTestCase {
         XCTAssertEqual(DictationEngine.capitalizeListItem("\n2. readability"), "\n2. Readability")
     }
 }
+
+/// Only ~4 of 22 screenshot runs did what was asked; vague follow-ups went there and harmless steps asked for confirmation.
+final class ScreenFallbackTests: XCTestCase {
+    func testEntryFilter() {
+        for vague in ["This one", "Resume.", "more", "this", "do it", "isso aqui"] {
+            XCTAssertFalse(CommandPipeline.screenFallbackAllowed(vague), vague)
+        }
+        for real in ["open the first conversation", "enter folder hello", "click the blue button", "move mouse to the right"] {
+            XCTAssertTrue(CommandPipeline.screenFallbackAllowed(real), real)
+        }
+        XCTAssertTrue(CommandPipeline.asksToLook("what is on the screen?"))
+        XCTAssertTrue(CommandPipeline.asksToLook("describe this picture"))
+        XCTAssertFalse(CommandPipeline.asksToLook("open the first conversation"))
+    }
+
+    func testHarmlessKeys() {
+        XCTAssertTrue(ComputerUseAgent.isHarmlessKeys(["down"], typed: false))
+        XCTAssertTrue(ComputerUseAgent.isHarmlessKeys(["return"], typed: false))
+        XCTAssertFalse(ComputerUseAgent.isHarmlessKeys(["return"], typed: true))
+        XCTAssertFalse(ComputerUseAgent.isHarmlessKeys(["cmd", "w"], typed: false))
+        XCTAssertFalse(ComputerUseAgent.isHarmlessKeys(["CMD", "backspace"].map { $0.lowercased() }, typed: false))
+    }
+}
