@@ -181,6 +181,13 @@ public final class RealtimeTranscriber {
     private var consecutiveHandshakeFailures = 0
     private let rotateAfter: TimeInterval = 50 * 60
     private var emittedFinals: [UUID: Set<Int>] = [:]
+    /// The service rejected our vocabulary hints: use only the minimal list for a while.
+    private var keywordsRejectedUntil: Date?
+
+    private func currentKeywords() -> [String] {
+        if let until = keywordsRejectedUntil, until > Date() { return ASRKeywords.minimal }
+        return ASRKeywords.sanitize(keywordsProvider())
+    }
 
     public init(apiKey: String?) { self.apiKey = apiKey }
 
@@ -217,7 +224,7 @@ public final class RealtimeTranscriber {
     public func refreshKeywords(force: Bool = false) {
         queue.async { [self] in
             guard !stopped, pending == nil, let active else { return }
-            let kw = keywordsProvider()
+            let kw = currentKeywords()
             guard force || kw != active.keywords else { return }
             guard !speaking, Date().timeIntervalSince(lastSpeechActivity) > 1.0 else { return }
             Log.speech.info("rotating ASR session for new keywords (\(kw.count, privacy: .public))")
@@ -230,7 +237,7 @@ public final class RealtimeTranscriber {
             emit(.error("No API key"))
             return
         }
-        let session = RealtimeSession(url: url, apiKey: key, keywords: keywordsProvider(), queue: queue)
+        let session = RealtimeSession(url: url, apiKey: key, keywords: currentKeywords(), queue: queue)
         session.onEvent = { [weak self] event, s in self?.handle(event, from: s) }
         if replacing { pending = session } else { active = session }
         session.open()
@@ -273,6 +280,14 @@ public final class RealtimeTranscriber {
             emit(event)
         case .error(let msg):
             Log.speech.error("asr error: \(msg, privacy: .public)")
+            if !session.isReady, msg.lowercased().contains("keyword") {
+                // A rejected vocabulary hint: reconnect at once with the minimal list instead of waiting
+                // for the handshake timeout, and do not flash the error in the overlay.
+                keywordsRejectedUntil = Date().addingTimeInterval(600)
+                session.close()
+                handle(.disconnected(code: 1008, reason: msg), from: session)
+                return
+            }
             emit(event)
         case .disconnected(let code, let reason):
             if session === pending {

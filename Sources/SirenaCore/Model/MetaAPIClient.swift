@@ -240,7 +240,7 @@ public final class MetaAPIClient: @unchecked Sendable {
         func part(_ s: String) { body.append(Data(s.utf8)) }
         let requestJSON: JSON = .object([
             "model": .string(model), "audioEncoding": "WAV", "mode": "ENDPOINTING",
-            "keywords": .array(keywords.map { .string($0) }), "languageBias": ["English"],
+            "keywords": .array(ASRKeywords.sanitize(keywords).map { .string($0) }), "languageBias": ["English"],
         ])
         part("--\(boundary)\r\nContent-Disposition: form-data; name=\"request\"\r\nContent-Type: application/json\r\n\r\n")
         body.append(try requestJSON.data())

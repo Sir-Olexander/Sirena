@@ -136,6 +136,15 @@ final class RouterTests: XCTestCase {
         XCTAssertFalse(Action.irreversibleLabel("Search"))
     }
 
+    func testASRKeywordLimits() {
+        let k = ASRKeywords.sanitize(["Sirena", "Demo Script Meta - Google Docs - Google Chrome – Alexandre", "sirena", " ", "Microsoft Teams (work or school)", String(repeating: "x", count: 45)])
+        XCTAssertTrue(k.allSatisfy { $0.count <= 30 && $0.count >= 2 })
+        XCTAssertEqual(k.first, "Sirena")
+        XCTAssertEqual(k.filter { $0.lowercased() == "sirena" }.count, 1)
+        XCTAssertEqual(k[1], "Demo Script Meta - Google Docs")
+        XCTAssertEqual(k.count, 4)
+    }
+
     func testLocalCleanup() {
         XCTAssertEqual(DictationEngine.localCleanup("um so basically the meeting is moved to friday"), "The meeting is moved to friday.")
     }

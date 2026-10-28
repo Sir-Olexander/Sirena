@@ -37,7 +37,8 @@ case "transcribe":
     guard let path = positional.first, let data = FileManager.default.contents(atPath: path) else { print("need a wav path"); exit(1) }
     let pcm = data.count > 44 ? data.subdata(in: 44..<data.count) : data
     let t = RealtimeTranscriber(apiKey: APIKeyStore.load())
-    t.keywordsProvider = { ["Sirena", "Hey Sirena", "Chrome", "Claude", "Notes"] }
+    // Includes a long window title on purpose: hints over 30 characters used to make the service reject the session.
+    t.keywordsProvider = { ["Sirena", "Hey Sirena", "Chrome", "Claude", "Notes", "Demo Script Meta - Google Docs - Google Chrome – Alexandre"] }
     let start = Date()
     var done = false
     t.onEvent = { e in

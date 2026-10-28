@@ -109,7 +109,6 @@ public final class ScreenContext {
         if let b = snap.browser {
             for tab in b.tabs.prefix(15) { if let w = titleWords(tab.title) { out.append(w) } }
         }
-        var seen = Set<String>()
-        return out.filter { seen.insert($0.lowercased()).inserted }.prefix(60).map { String($0.prefix(40)) }
+        return Array(ASRKeywords.sanitize(out).prefix(60))
     }
 }
