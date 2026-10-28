@@ -21,9 +21,34 @@ by `speechEnd.audioProcessedMs`) was sent and the `speechComplete` event.
 ### On-device wake word
 
 In the waiting state `LocalWakeWordDetector` runs `SFSpeechRecognizer` with `requiresOnDeviceRecognition`
-on the raw microphone buffers and the Meta session is closed. When "Hey Sirena" (or a close misrecognition)
-shows up in the on-device partials, the realtime session is reopened and the state becomes awake. The
-recognizer request is rotated every 45 s because on-device requests are limited to about a minute.
+on the raw microphone buffers. `StreamGate` keeps the Meta session open but sends zeros instead of audio,
+holding the last ~3 s of real audio locally. When "Hey Sirena" shows up in the on-device partials, the gate
+goes live and replays that pre-roll, so "Hey Sirena, switch to Chrome" said in one breath reaches the
+recognizer whole; the router turns it into wake + command.
+
+The detector must prove it works before audio goes private (1.2 s without errors), and it reports failure
+instead of retrying silently: fatal recognizer errors (kLSRErrorDomain 201 "Siri and Dictation are disabled"
+is what a Mac with Dictation off returns), three errors in 20 s, or four seconds of speech-like audio with no
+recognition result. The controller then switches back to streaming real audio. A probe at launch marks it
+unavailable up front and the menu shows why.
+
+### Microphone
+
+`AudioCapture` enables voice processing on the input node (noise suppression, AGC, echo cancellation, other
+audio not ducked). It tries, in order: voice processing with an echo-cancelled player node (used for reading
+aloud), voice processing without it (Bluetooth headsets in call mode report a 0 Hz output format and fail to
+initialize with the player attached, -10875), then the plain microphone. AVAudioEngine graph calls run inside
+an Objective-C `@try` (`SirenaObjC`) because invalid formats raise exceptions Swift cannot catch.
+
+### Reading aloud
+
+`ReadAloud` synthesizes sentence by sentence with `AVSpeechSynthesizer.write` (on-device voice chosen by the
+text's language), converts and schedules buffers on the player node, and reports progress per sentence. Speed
+changes restart the current sentence. Transcripts that match the sentences around the current one are dropped
+as echo (`isLikelyEcho`), so Sirena never acts on her own voice even without echo cancellation.
+`TextExtractor` gets the selection (Accessibility, else ⌘C with the clipboard restored), the article (`<article>`
+/ `<main>` landmarks, prose blocks, skipping navigation, sidebars and anything whose DOM class looks like an ad,
+footer, share bar or recommendation), or all visible text.
 
 ## Listening state machine (`ListeningController`)
 
@@ -58,8 +83,29 @@ recognizer request is rotated every 45 s because on-device requests are limited 
 for text insertion (previous contents restored). It keeps a small undo stack (text inserted, app switched,
 tab switched).
 
+## Shortcuts, notes, learning
+
+* `ShortcutBook` stores named commands as a readable script (one step per line, `docs/shortcut-rulebook.md`).
+  Triggers support `{placeholders}`; matching is exact for placeholders and fuzzy (0.86) for plain names.
+  `ShortcutScript.enforceConfirmations` inserts a `confirm` before sending, calling, deleting, buying or
+  submitting, both when saving and when running. `ShortcutCompiler` writes steps with Muse Spark following the
+  rulebook, with the real labels and menus of running apps and the user's Apple Shortcuts as context.
+* The pipeline order is: Sirena's controls → saved shortcuts (and Apple Shortcuts after "run") → snippets →
+  fast path → model loop → screenshot fallback. Every history entry carries the session id, the command, the
+  structured actions and a failure flag.
+* `UsageLearner` mines that history after turn-off (no model calls): commands undone or rephrased right after
+  running, commands that needed the model twice with the same plan (or the screen twice), and failures followed
+  by successful commands. It drops "this/that" commands, labels with counters or dates, numbered clicks and
+  dismissed triggers, adds confirmations to irreversible steps, ranks by usefulness, keeps at most three pending
+  and adds new ones at most once a day.
+* `SessionStats` meters audio seconds, tokens per category, screen reads and their triggering command,
+  commands per layer, failures, latencies, reconnects and wake methods, priced with the published rates.
+
 ## Overlay
 
+`OverlayController` keeps one `OverlayPanel` per screen (rebuilt when screens change), all bound to the same
+`OverlayModel`; each panel remembers its position as an offset from its screen's origin (keyed by display UUID).
+The active screen (front window's screen, polled once a second) gets a marker and the other copies are dimmed.
 `OverlayPanel` is an `NSPanel` with `.nonactivatingPanel`, `canBecomeKey == false`, level `.screenSaver`,
 `canJoinAllSpaces` + `fullScreenAuxiliary`. The SwiftUI `OverlayView` renders the states; the panel resizes
 to the content, anchored at the bottom-center point the user dragged it to. It is excluded from the

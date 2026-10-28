@@ -26,3 +26,12 @@ Fallbacks during the demo:
 * If the confirm card does not appear because Claude's composer was not focused, say "Sirena, click the
   message box" first, then repeat the send command.
 * If realtime transcription drops, the pill shows "Reconnecting…" and comes back on its own.
+
+## Extra beats (if there is time)
+
+* "Sirena, start dictating" … "first point, finish the overlay" … "second point," … "test it on both monitors"
+  … "Sirena, stop" → numbered list; "Sirena, separate the points with two line breaks" → reformatted in place.
+* "Sirena, move this window to the other screen" — the overlay marker follows to the other monitor.
+* "Sirena, read the article" … "faster" … "stop" — no name needed while she reads, and she ignores her own voice.
+* "Sirena, call mom" — a saved shortcut; the confirmation says exactly "Call Mother on WhatsApp?".
+* Menu → Developer mode: the usage panel shows audio seconds, tokens and cost for the run so far.
