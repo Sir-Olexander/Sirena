@@ -31,6 +31,11 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
     public var onSessionLog: (() -> Void)?
     public var suggestionCount: () -> Int = { 0 }
     public var microphoneStatus: () -> String = { "" }
+    /// Input devices for the Microphone submenu: (uid, name).
+    public var microphones: () -> [(String, String)] = { [] }
+    public var selectedMicrophone: () -> String? = { nil }
+    public var activeMicrophone: () -> String? = { nil }
+    public var onSelectMicrophone: ((String?) -> Void)?
 
     public init(settings: Settings) {
         self.settings = settings
@@ -93,9 +98,27 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         nr.state = settings.noiseReduction ? .on : .off
         nr.toolTip = "Apple voice processing: noise suppression and echo cancellation before speech recognition."
         menu.addItem(nr)
+        let micMenu = NSMenu()
+        let auto = NSMenuItem(title: "Automatic (system default, skips silent mics)", action: #selector(chooseMicrophone(_:)), keyEquivalent: "")
+        auto.target = self
+        auto.representedObject = nil
+        auto.state = selectedMicrophone() == nil ? .on : .off
+        micMenu.addItem(auto)
+        micMenu.addItem(.separator())
+        let active = activeMicrophone()
+        for (uid, name) in microphones() {
+            let it = NSMenuItem(title: name + (active == uid && selectedMicrophone() == nil ? "  (in use)" : ""), action: #selector(chooseMicrophone(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = uid
+            it.state = selectedMicrophone() == uid ? .on : .off
+            micMenu.addItem(it)
+        }
+        let micItem = NSMenuItem(title: "Microphone", action: nil, keyEquivalent: "")
+        micItem.submenu = micMenu
+        menu.addItem(micItem)
         let mic = microphoneStatus()
         if !mic.isEmpty {
-            let m = NSMenuItem(title: "   Microphone: \(mic)", action: nil, keyEquivalent: "")
+            let m = NSMenuItem(title: "   \(mic)", action: nil, keyEquivalent: "")
             m.isEnabled = false
             menu.addItem(m)
         }
@@ -173,6 +196,7 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func togglePrivate() { settings.privateMode.toggle(); onPrivateModeChanged?(settings.privateMode) }
     @objc private func togglePTT() { settings.pushToTalk.toggle(); onSettingsChanged?() }
     @objc private func toggleRaw() { settings.rawDictation.toggle(); onSettingsChanged?() }
+    @objc private func chooseMicrophone(_ sender: NSMenuItem) { onSelectMicrophone?(sender.representedObject as? String) }
     @objc private func toggleNoise() { settings.noiseReduction.toggle(); onNoiseReductionToggled?(); onSettingsChanged?() }
     @objc private func toggleLocalWake() { settings.localWakeWord.toggle(); onLocalWakeToggled?(); onSettingsChanged?() }
     @objc private func toggleLatency() { settings.showLatency.toggle(); onSettingsChanged?() }

@@ -15,6 +15,8 @@ public final class Settings: ObservableObject {
     @Published public var localModelBaseURL: String { didSet { defaults.set(localModelBaseURL, forKey: "localModelBaseURL") } }
     @Published public var onboardingDone: Bool { didSet { defaults.set(onboardingDone, forKey: "onboardingDone") } }
     @Published public var globalShortcutEnabled: Bool { didSet { defaults.set(globalShortcutEnabled, forKey: "globalShortcutEnabled") } }
+    /// Chosen microphone (Core Audio UID); nil = automatic (system default, switching away from a silent one).
+    @Published public var microphoneUID: String? { didSet { defaults.set(microphoneUID, forKey: "microphoneUID") } }
     /// Dev mode: the usage panel is shown.
     @Published public var devMode: Bool { didSet { defaults.set(devMode, forKey: "devMode") } }
     /// Clean the microphone with voice processing (noise suppression, echo cancellation) before recognition.
@@ -66,5 +68,6 @@ public final class Settings: ObservableObject {
         localWakeWord = defaults.object(forKey: "localWakeWord") as? Bool ?? true
         noiseReduction = defaults.object(forKey: "noiseReduction") as? Bool ?? true
         devMode = defaults.bool(forKey: "devMode")
+        microphoneUID = defaults.string(forKey: "microphoneUID")
     }
 }

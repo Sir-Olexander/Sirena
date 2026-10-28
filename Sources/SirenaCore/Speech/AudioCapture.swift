@@ -33,6 +33,17 @@ public final class AudioCapture {
 
     /// Use voice processing (noise suppression + echo cancellation) on the next start.
     public var voiceProcessing = true
+    /// Input device to use (Core Audio UID); nil = the system default input.
+    public var preferredDeviceUID: String?
+    public private(set) var currentDeviceName = ""
+    public private(set) var currentDeviceUID = ""
+    /// Main thread: the microphone has delivered only digital silence (exact zeros) for 3 seconds.
+    /// A real microphone is never exactly silent, so this means the device is not sending audio
+    /// (e.g. Bluetooth earbuds whose mic is connected to another device).
+    public var onSilentInput: ((String) -> Void)?
+    private var zeroSeconds: Double = 0
+    private var silenceReported = false
+    private var heardSignal = false
     public private(set) var voiceProcessingActive = false
     /// Player attached to the capture engine when voice processing is active: its output is echo-cancelled.
     public private(set) var playbackNode: AVAudioPlayerNode?
@@ -54,7 +65,10 @@ public final class AudioCapture {
 
     public func start() throws {
         guard !isRunning else { return }
-        if voiceProcessing {
+        // Voice processing always uses the system's default devices, so a chosen non-default microphone is
+        // captured without it (otherwise the voice-processing unit keeps listening to the default device).
+        let chosenIsDefault = preferredDeviceUID.map { $0 == AudioDevices.defaultInput?.uid } ?? true
+        if voiceProcessing && chosenIsDefault {
             // With the echo-cancelled player first; some devices (e.g. Bluetooth headsets in call mode) refuse the
             // output side, so then without it; then the plain microphone.
             for withPlayer in [true, false] {
@@ -79,6 +93,17 @@ public final class AudioCapture {
         engine = AVAudioEngine()
         let input = engine.inputNode
         voiceProcessingActive = false
+        zeroSeconds = 0
+        silenceReported = false
+        heardSignal = false
+        // A chosen device other than the system default.
+        var chosen: AudioDevices.Device?
+        let defaultDevice = AudioDevices.defaultInput
+        if let uid = preferredDeviceUID, let dev = AudioDevices.device(uid: uid), dev.id != defaultDevice?.id, AudioDevices.use(dev, for: engine) {
+            chosen = dev
+        }
+        currentDeviceName = chosen?.name ?? defaultDevice?.name ?? "microphone"
+        currentDeviceUID = chosen?.uid ?? defaultDevice?.uid ?? ""
         if vp {
             try input.setVoiceProcessingEnabled(true)
             // Do not turn other apps (music, calls) down while Sirena listens.
@@ -87,7 +112,12 @@ public final class AudioCapture {
             voiceProcessingActive = true
         }
         setupStep = "format"
-        let inFormat = input.outputFormat(forBus: 0)
+        var inFormat = input.outputFormat(forBus: 0)
+        if chosen != nil {
+            // After switching devices the node can keep the old device's format; the tap needs the real one.
+            let hw = input.inputFormat(forBus: 0)
+            if hw.sampleRate > 0, hw.sampleRate != inFormat.sampleRate { inFormat = hw }
+        }
         guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else {
             throw NSError(domain: "Sirena.Audio", code: 1, userInfo: [NSLocalizedDescriptionKey: "No microphone input available"])
         }
@@ -142,7 +172,7 @@ public final class AudioCapture {
         if vp { voiceProcessingError = nil }
         isRunning = true
         startedAt = Date()
-        inputDescription = "\(Int(inFormat.sampleRate)) Hz, \(inFormat.channelCount) ch\(vp ? ", noise reduction on" : "")"
+        inputDescription = "\(currentDeviceName) · \(Int(inFormat.sampleRate)) Hz\(vp ? " · noise reduction on" : "")"
         observer = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
             self?.restartAfterConfigChange()
         }
@@ -205,6 +235,20 @@ public final class AudioCapture {
         guard status != .error, out.frameLength > 0, let ch = out.int16ChannelData else { return }
         let count = Int(out.frameLength)
         let samples = UnsafeBufferPointer(start: ch[0], count: count)
+        // Digital-silence watchdog: only for a device that has not delivered a single non-zero sample since it
+        // started (noise suppression may gate a quiet room to zeros later on; that is not a dead microphone).
+        if heardSignal || silenceReported {
+            // nothing to watch
+        } else if samples.contains(where: { $0 != 0 }) {
+            heardSignal = true
+        } else {
+            zeroSeconds += Double(count) / outFormat.sampleRate
+            if zeroSeconds >= 3 {
+                silenceReported = true
+                let name = currentDeviceName
+                DispatchQueue.main.async { [weak self] in self?.onSilentInput?(name) }
+            }
+        }
         // Level metering
         var sum: Float = 0
         for s in samples { let f = Float(s) / 32768; sum += f * f }

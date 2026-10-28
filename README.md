@@ -166,6 +166,15 @@ command), noise reduction, on-device wake word, raw dictation, latency display, 
 shortcut book, notes & snippets, custom vocabulary, command history (window and plain text), developer mode,
 session log, permissions.
 
+### Microphone
+
+"Microphone" in the menu picks the input: Automatic (the system default) or a specific device. Some Bluetooth
+earbuds appear as the default input but send only digital silence to the Mac (for example when their microphone
+is connected to a phone). Sirena notices after three seconds, says "No sound from <device> — listening with
+<other microphone>" and switches. Noise reduction (Apple voice processing) works only on the system default
+input, so a microphone chosen this way is captured without it; set it as the input in System Settings → Sound to
+get noise reduction too.
+
 ### On-device wake word
 
 While waiting, "Hey Sirena" can be detected with Apple's on-device speech recognition so no real audio leaves

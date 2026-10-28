@@ -221,6 +221,10 @@ public final class AppController {
         menuBar.localWakeStatus = { [weak self] in self?.listening.localWakeStatus ?? "" }
         menuBar.onNoiseReductionToggled = { [weak self] in self?.listening.applyNoiseReduction() }
         menuBar.microphoneStatus = { [weak self] in self?.listening.microphoneDescription ?? "" }
+        menuBar.microphones = { AudioDevices.inputs().map { ($0.uid, $0.name) } }
+        menuBar.selectedMicrophone = { [weak self] in self?.settings.microphoneUID }
+        menuBar.activeMicrophone = { [weak self] in self?.listening.currentMicrophoneUID }
+        menuBar.onSelectMicrophone = { [weak self] uid in self?.listening.selectMicrophone(uid: uid) }
         menuBar.onLocalWakeToggled = { [weak self] in
             guard let self else { return }
             self.listening.resetLocalWakeFailure()

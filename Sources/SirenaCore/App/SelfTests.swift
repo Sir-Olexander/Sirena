@@ -11,20 +11,30 @@ public enum SelfTests {
         case "audio": return await audio()
         case "context": return context()
         case "vpdebug": return vpDebug()
+        case "mics": return mics()
+        case "fallback": return await fallback()
         default: return "unknown self-test \(name)"
         }
     }
 
     /// Captures 3 s with voice processing, then 3 s without, and reports what arrived.
     static func audio() async -> String {
-        var lines: [String] = []
+        var lines: [String] = ["microphone permission: \(Permissions.status(.microphone)), default input: \(AudioDevices.defaultInput?.name ?? "none")"]
         for vp in [true, false] {
             let cap = AudioCapture()
             cap.voiceProcessing = vp
             var chunks = 0
             var levels: [Float] = []
+            var maxSample: Int16 = 0
+            var nonZero = 0
             let lock = NSLock()
-            cap.onChunk = { _ in lock.lock(); chunks += 1; lock.unlock() }
+            cap.onChunk = { pcm in
+                lock.lock(); chunks += 1
+                pcm.withUnsafeBytes { raw in
+                    for v in raw.bindMemory(to: Int16.self) { let a = v == Int16.min ? Int16.max : abs(v); if a > maxSample { maxSample = a }; if v != 0 { nonZero += 1 } }
+                }
+                lock.unlock()
+            }
             cap.onLevel = { l, _ in lock.lock(); levels.append(l); lock.unlock() }
             do {
                 try await MainActor.run { try cap.start() }
@@ -32,10 +42,76 @@ public enum SelfTests {
                 await MainActor.run { cap.stop() }
                 lock.lock()
                 let avg = levels.isEmpty ? 0 : levels.reduce(0, +) / Float(levels.count)
-                lines.append("requested voice processing=\(vp): active=\(cap.voiceProcessingActive) input=\(cap.inputDescription) chunks=\(chunks) (expect ~37) avgLevel=\(String(format: "%.3f", avg)) echoCancelledPlayer=\(cap.playbackNode != nil) lastError=\(cap.voiceProcessingError ?? "none")")
+                lines.append("requested voice processing=\(vp): active=\(cap.voiceProcessingActive) input=\(cap.inputDescription) chunks=\(chunks) (expect ~37) avgLevel=\(String(format: "%.4f", avg)) maxSample=\(maxSample) nonZeroSamples=\(nonZero) echoCancelledPlayer=\(cap.playbackNode != nil) lastError=\(cap.voiceProcessingError ?? "none")")
                 lock.unlock()
             } catch {
                 lines.append("requested voice processing=\(vp): start failed: \(error.localizedDescription)")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// The capture class on the default input: does the silence watchdog fire, and does the built-in mic deliver sound?
+    static func fallback() async -> String {
+        var lines: [String] = []
+        let cap = AudioCapture()
+        cap.voiceProcessing = true
+        var silentReported: String?
+        cap.onSilentInput = { silentReported = $0 }
+        do {
+            try await MainActor.run { try cap.start() }
+            lines.append("started on \(cap.inputDescription)")
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            lines.append("silence watchdog: \(silentReported.map { "fired for \($0)" } ?? "did not fire")")
+            await MainActor.run { cap.stop() }
+            if let builtIn = AudioDevices.inputs().first(where: { $0.isBuiltIn }) {
+                cap.preferredDeviceUID = builtIn.uid
+                var maxSample: Int16 = 0
+                let lock = NSLock()
+                cap.onChunk = { pcm in pcm.withUnsafeBytes { raw in for v in raw.bindMemory(to: Int16.self) { let a = v == Int16.min ? Int16.max : abs(v); lock.lock(); if a > maxSample { maxSample = a }; lock.unlock() } } }
+                silentReported = nil
+                try await MainActor.run { try cap.start() }
+                lines.append("restarted on \(cap.inputDescription)")
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                await MainActor.run { cap.stop() }
+                lines.append("built-in mic peak sample \(maxSample) (non-zero = sound), watchdog \(silentReported == nil ? "quiet" : "fired")")
+            }
+        } catch {
+            lines.append("error: \(error.localizedDescription)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// 2 seconds from every input device: does it deliver any signal?
+    static func mics() -> String {
+        var lines: [String] = ["default input: \(AudioDevices.defaultInput?.name ?? "none")"]
+        for dev in AudioDevices.inputs() {
+            let engine = AVAudioEngine()
+            guard AudioDevices.use(dev, for: engine) else { lines.append("\(dev.name): cannot select"); continue }
+            engine.prepare()
+            let hw = engine.inputNode.inputFormat(forBus: 0)
+            let fmt = engine.inputNode.outputFormat(forBus: 0)
+            lines.append("  \(dev.name): hardware \(Int(hw.sampleRate)) Hz \(hw.channelCount) ch, node output \(Int(fmt.sampleRate)) Hz \(fmt.channelCount) ch")
+            var maxAbs: Float = 0
+            var frames = 0
+            let lock = NSLock()
+            do {
+                try catchingObjC("tap") {
+                    engine.inputNode.installTap(onBus: 0, bufferSize: 1024, format: hw) { buf, _ in
+                        guard let ch = buf.floatChannelData else { return }
+                        lock.lock()
+                        for c in 0..<Int(buf.format.channelCount) { for i in 0..<Int(buf.frameLength) { maxAbs = max(maxAbs, abs(ch[c][i])) } }
+                        frames += Int(buf.frameLength)
+                        lock.unlock()
+                    }
+                }
+                try engine.start()
+                Thread.sleep(forTimeInterval: 2)
+                engine.stop()
+                engine.inputNode.removeTap(onBus: 0)
+                lines.append("\(dev.name)\(dev.isBuiltIn ? " (built-in)" : "")\(dev.isBluetooth ? " (Bluetooth)" : ""): \(Int(fmt.sampleRate)) Hz \(fmt.channelCount) ch, frames \(frames), peak \(String(format: "%.5f", maxAbs))\(maxAbs == 0 ? "  ← SILENT" : "")")
+            } catch {
+                lines.append("\(dev.name): failed \(error.localizedDescription)")
             }
         }
         return lines.joined(separator: "\n")

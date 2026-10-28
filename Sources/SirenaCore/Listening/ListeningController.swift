@@ -110,6 +110,7 @@ public final class ListeningController {
             if state == .idle { self.openFollowUpWindow() }
         }
         audio.onStatus = { [weak self] message in self?.overlay.showMessage(message, autoClear: 3) }
+        audio.onSilentInput = { [weak self] name in self?.handleSilentMicrophone(name) }
         pipeline.onControl = { [weak self] a in self?.handleControl(a) }
         pipeline.fastPathContext = { [weak self] in
             guard let self else { return .init() }
@@ -144,8 +145,67 @@ public final class ListeningController {
         }
     }
 
+    // MARK: - Microphone choice and silent microphones
+
+    /// Microphone picked automatically after the default one turned out silent (this run only).
+    private var autoMicrophoneUID: String?
+    private var silentMicrophoneUIDs = Set<String>()
+    /// Voice processing produced silence on every device: keep it off for this run.
+    private var voiceProcessingSilenced = false
+
+    /// "Automatic" (nil) or a device UID from the menu.
+    public func selectMicrophone(uid: String?) {
+        settings.microphoneUID = uid
+        autoMicrophoneUID = nil
+        silentMicrophoneUIDs = []
+        voiceProcessingSilenced = false
+        restartMicrophone(message: nil)
+    }
+
+    public var currentMicrophoneUID: String? { audio.isRunning ? audio.currentDeviceUID : nil }
+
+    private func restartMicrophone(message: String?) {
+        guard audio.isRunning, !simulateInput else { return }
+        reader.stop()
+        audio.stop()
+        audio.voiceProcessing = settings.noiseReduction && !voiceProcessingSilenced
+        audio.preferredDeviceUID = settings.microphoneUID ?? autoMicrophoneUID
+        do {
+            try audio.start()
+            if let message { overlay.showMessage(message, autoClear: 7) }
+        } catch {
+            overlay.showError("Microphone: \(error.localizedDescription)")
+        }
+    }
+
+    /// The microphone sends only digital silence: try another microphone, then without voice processing.
+    private func handleSilentMicrophone(_ name: String) {
+        guard state != .off, !simulateInput else { return }
+        Log.speech.error("no sound from \(name, privacy: .public)")
+        history.append(HistoryEntry(utterance: "(no sound from \(name))", route: "microphone", result: "silent"))
+        if settings.microphoneUID != nil {
+            overlay.showError("No sound from \(name) — check it, or choose another microphone in Sirena's menu", autoClear: 10)
+            return
+        }
+        silentMicrophoneUIDs.insert(audio.currentDeviceUID)
+        let candidates = AudioDevices.inputs().filter { !silentMicrophoneUIDs.contains($0.uid) }
+            .sorted { a, b in a.isBuiltIn != b.isBuiltIn ? a.isBuiltIn : (a.isBluetooth != b.isBluetooth ? !a.isBluetooth : a.name < b.name) }
+        if let next = candidates.first {
+            autoMicrophoneUID = next.uid
+            restartMicrophone(message: "No sound from \(name) — listening with \(next.name)")
+        } else if audio.voiceProcessing {
+            voiceProcessingSilenced = true
+            silentMicrophoneUIDs = []
+            autoMicrophoneUID = nil
+            restartMicrophone(message: "No sound with noise reduction — trying the plain microphone")
+        } else {
+            overlay.showError("No sound from any microphone — check System Settings → Sound → Input", autoClear: 12)
+        }
+    }
+
     /// Apply the noise-reduction setting: restart the microphone if it is running.
     public func applyNoiseReduction() {
+        voiceProcessingSilenced = false
         audio.voiceProcessing = settings.noiseReduction
         guard audio.isRunning, !simulateInput else { return }
         reader.stop()
@@ -200,7 +260,8 @@ public final class ListeningController {
                 return
             }
             do {
-                self.audio.voiceProcessing = self.settings.noiseReduction
+                self.audio.voiceProcessing = self.settings.noiseReduction && !self.voiceProcessingSilenced
+                self.audio.preferredDeviceUID = self.settings.microphoneUID ?? self.autoMicrophoneUID
                 try self.audio.start()
             } catch {
                 self.overlay.showError("Microphone: \(error.localizedDescription)")
