@@ -210,3 +210,29 @@ final class ElementIdTests: XCTestCase {
         XCTAssertTrue(text.contains("  3 row \"Bluetooth\"\n") || text.hasSuffix("  3 row \"Bluetooth\""), text)
     }
 }
+
+/// "Close all tabs" closed the window, one tab or everything across four attempts (2026-10-28): one meaning now.
+final class CloseAllTabsTests: XCTestCase {
+    func parse(_ s: String) -> [Action]? { FastPathParser.parse(s)?.actions }
+
+    func testOneMeaning() {
+        for s in ["close all tabs", "Close all the tabs.", "close every tab", "close the tabs", "close all tabs in this window", "close all of them", "fecha todos os separadores"] {
+            XCTAssertEqual(parse(s), [.closeTabs(.all)], s)
+        }
+        XCTAssertEqual(parse("close the tab"), [.closeTab])
+        XCTAssertEqual(parse("close all tabs but this one"), [.closeTabs(.others)])
+        XCTAssertEqual(parse("Close all tabs unless the first one"), [.closeTabs(.allExcept(.first))])
+        XCTAssertEqual(parse("Close all tabs to the right from the first tab"), [.closeTabs(.allExcept(.first))])
+        XCTAssertEqual(parse("close all tabs to the right"), [.closeTabs(.right)])
+        XCTAssertEqual(BrowserControl.indices(of: .all, count: 3, active: 2).close, [1, 2, 3])
+        XCTAssertEqual(ModelCommandPlanner.actions(for: "close_tabs", args: .object(["which": "all"])), [.closeTabs(.all)])
+        XCTAssertEqual(UtteranceRouter.route("close a sirena. Close all tabs.", context: RouterContext(state: .awake)), .command("Close all tabs"))
+    }
+
+    func testTheVisibleWindowIsMatchedByTitle() {
+        let script = BrowserControl.windowSelector(kind: .chromium, wanted: "He said \"hi\"")
+        XCTAssertTrue(script.contains("(title of active tab of x) contains \"He said \\\"hi\\\"\""), script)
+        XCTAssertTrue(script.contains("set w to window id (id of x)"))
+        XCTAssertEqual(BrowserControl.windowSelector(kind: .safari, wanted: nil), "set w to front window")
+    }
+}

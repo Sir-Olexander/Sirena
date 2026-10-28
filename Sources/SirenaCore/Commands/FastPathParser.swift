@@ -371,9 +371,21 @@ public enum FastPathParser {
 
     /// "close (all) (the) tabs to the right", "close the other tabs", "close all tabs but the first one".
     static func closeTabs(_ t: String) -> ParsedCommand? {
-        guard t.hasPrefix("close") || t.hasPrefix("keep only") || t.hasPrefix("get rid of") else { return nil }
+        guard t.hasPrefix("close") || t.hasPrefix("keep only") || t.hasPrefix("get rid of") || t.hasPrefix("fecha") else { return nil }
         let tabs = "(?:all\\s+)?(?:of\\s+)?(?:the\\s+)?(?:tabs?|taps?|everything|all)"
         let here = "(?:\\s+(?:of|from)\\s+(?:this|the current|the active|the actual|my)?\\s*(?:one|tab|tap|page)?)?"
+        // "close all tabs", "close all the tabs", "close every tab", "close the tabs": every tab, one empty tab stays.
+        if t.firstMatch("^(?:close|get rid of)\\s+(?:all\\s+(?:of\\s+)?(?:the\\s+|my\\s+)?(?:tabs?|taps?)|every\\s+(?:tab|tap)|the\\s+(?:tabs|taps)|all\\s+(?:the\\s+)?open\\s+tabs|all\\s+of\\s+them)(?:\\s+(?:in\\s+this\\s+window|here|of\\s+this\\s+window|in\\s+the\\s+window))?$") != nil
+            || ["fecha todos os separadores", "fecha as abas todas", "fecha todas as abas", "fecha os separadores todos", "fechar todos os separadores"].contains(t) {
+            return ParsedCommand(.closeTabs(.all))
+        }
+        // "close all tabs to the right from/of the first tab": everything after tab 1.
+        if t.firstMatch("^(?:close|get rid of)\\s+\(tabs)\\s+(?:to|on|at)\\s+the\\s+right\\s+(?:of|from)\\s+the\\s+first(?:\\s+(?:one|tab|tap))?$") != nil {
+            return ParsedCommand(.closeTabs(.allExcept(.first)))
+        }
+        if t.firstMatch("^(?:close|get rid of)\\s+\(tabs)\\s+(?:to|on|at)\\s+the\\s+left\\s+(?:of|from)\\s+the\\s+last(?:\\s+(?:one|tab|tap))?$") != nil {
+            return ParsedCommand(.closeTabs(.allExcept(.last)))
+        }
         if t.firstMatch("^(?:close|get rid of)\\s+\(tabs)\\s+(?:to|on|at)\\s+the\\s+right\(here)$") != nil || t == "close tabs right" {
             return ParsedCommand(.closeTabs(.right))
         }
@@ -381,11 +393,11 @@ public enum FastPathParser {
             return ParsedCommand(.closeTabs(.left))
         }
         if t.firstMatch("^(?:close|get rid of)\\s+(?:all\\s+)?(?:of\\s+)?(?:the\\s+)?other\\s+(?:tabs?|taps?)$") != nil
-            || t.firstMatch("^(?:close|get rid of)\\s+\(tabs)\\s+(?:but|except|apart from|other than)\\s+(?:this|the current|the active|the actual|this current)(?:\\s+(?:one|tab|tap|page))?$") != nil
+            || t.firstMatch("^(?:close|get rid of)\\s+\(tabs)\\s+(?:but|except|except for|apart from|other than|unless|besides|but not|save)\\s+(?:this|the current|the active|the actual|this current)(?:\\s+(?:one|tab|tap|page))?$") != nil
             || ["keep only this tab", "keep only this one", "keep only the current tab"].contains(t) {
             return ParsedCommand(.closeTabs(.others))
         }
-        if let m = t.firstMatch("^(?:close|get rid of)\\s+\(tabs)\\s+(?:but|except|apart from|other than)\\s+(?:the\\s+)?(?:tab\\s+)?(?:number\\s+)?(\\S+)(?:\\s+(?:one|tab|tap))?$") {
+        if let m = t.firstMatch("^(?:close|get rid of)\\s+\(tabs)\\s+(?:but|except|except for|apart from|other than|unless|besides|but not|save)\\s+(?:the\\s+)?(?:tab\\s+)?(?:number\\s+)?(\\S+)(?:\\s+(?:one|tab|tap))?$") {
             let w = m[1]
             if w == "last" { return ParsedCommand(.closeTabs(.allExcept(.last))) }
             if w == "first" { return ParsedCommand(.closeTabs(.allExcept(.first))) }

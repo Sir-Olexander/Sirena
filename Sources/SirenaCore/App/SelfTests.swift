@@ -143,6 +143,29 @@ public enum SelfTests {
         let others = try? await executor.execute([.closeTabs(.allExcept(.last))], snapshot: nil)
         let info = BrowserControl.info(for: chrome)
         lines.append("close all tabs but the last one → \(others?.summary ?? "error"); tabs left: \(info?.tabs.count ?? -1) (expect 1), active \(info?.activeIndex ?? -1)")
+        // Switching by position in one AppleScript call, in the window the user sees.
+        _ = script("""
+            tell application "Google Chrome"
+                set w to window id \(wid)
+                repeat with k from 2 to 4
+                    make new tab at end of tabs of w with properties {URL:"about:blank#s" & k}
+                end repeat
+                set active tab index of w to 1
+            end tell
+            """)
+        usleep(400_000)
+        lines.append("window seen by tab commands: \(BrowserControl.info(for: chrome).map { "id \($0.windowId ?? -1) (test window \(wid)), \($0.tabs.count) tabs, other windows \($0.otherWindows)" } ?? "none")")
+        for (label, target, expect) in [("tab 3", TabTarget.index(3), "3"), ("next tab", .next, "4"), ("previous tab", .previous, "3"), ("last tab", .last, "4"),
+                                        ("first tab", .first, "1"), ("tab 9", .index(9), "error")] {
+            let t0 = Date()
+            var result: String
+            do { result = try await executor.execute([.switchTab(target)], snapshot: nil).summary } catch { result = "error: \(error.localizedDescription)" }
+            let ms = Int(Date().timeIntervalSince(t0) * 1000)
+            lines.append("\(label) → \(result) in \(ms) ms; active now \(BrowserControl.info(for: chrome)?.activeIndex ?? -1) (expect \(expect))")
+        }
+        let all = try? await executor.execute([.closeTabs(.all)], snapshot: nil)
+        let afterAll = BrowserControl.info(for: chrome)
+        lines.append("close all tabs → \(all?.summary ?? "error"); tabs left: \(afterAll?.tabs.count ?? -1) (expect 1: \(afterAll?.activeTab?.url ?? "?")), same window: \(afterAll?.windowId.map { "\($0)" } == wid)")
         _ = script("tell application \"Google Chrome\" to close window id \(wid)")
         lines.append("test window closed; Chrome windows now: \(ax.windows.count)")
         return lines.joined(separator: "\n")

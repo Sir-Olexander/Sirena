@@ -442,8 +442,18 @@ public final class ActionExecutor {
         guard let info = BrowserControl.info(for: browser) else {
             throw ExecutionError.failed("\(browser.name) did not share its tabs — allow Sirena under System Settings → Privacy & Security → Automation")
         }
+        Log.commands.notice("close tabs \(String(describing: set), privacy: .public) in window \(info.windowId ?? -1) (\(info.tabs.count) tabs, active \(info.activeIndex), other windows: \(info.otherWindows))")
+        if set == .all {
+            guard let n = BrowserControl.closeAllTabs(in: info) else { throw ExecutionError.failed("\(browser.name) refused to close the tabs") }
+            context.invalidateBrowserCache()
+            undoStack.append(.tabsClosed(browser: browser, count: n))
+            return "Closed all \(n) tab\(n == 1 ? "" : "s"), one empty tab left"
+        }
         let (close, keep) = BrowserControl.indices(of: set, count: info.tabs.count, active: info.activeIndex)
-        guard !close.isEmpty else { return "No tabs to close" }
+        guard !close.isEmpty else {
+            let title = info.activeTab.map { "“\(AppTabs.cleanTitle($0.title).prefix(30))”" } ?? "this window"
+            return "No tabs to close: the window with \(title) has \(info.tabs.count) tab\(info.tabs.count == 1 ? "" : "s")"
+        }
         guard BrowserControl.closeTabs(close, in: info) else { throw ExecutionError.failed("\(browser.name) refused to close the tabs") }
         context.invalidateBrowserCache()
         // The kept tab is now first when every other tab was closed; make sure it is the active one.
@@ -458,6 +468,7 @@ public final class ActionExecutor {
         case .right: what = "to the right"
         case .left: what = "to the left"
         case .others, .allExcept: what = "other"
+        case .all: what = "in all"
         }
         return what == "other" ? "Closed \(n) other tab\(n == 1 ? "" : "s")" : "Closed \(n) tab\(n == 1 ? "" : "s") \(what)"
     }
@@ -485,6 +496,9 @@ public final class ActionExecutor {
     /// VS Code-style editors: ⌥⌘T closes the other editors; the command palette closes to the right / left.
     private func closeEditorTabs(_ set: TabSet, app: AppInfo) -> String {
         switch set {
+        case .all:
+            Keyboard.press([KeyCombo("k", [.command]), KeyCombo("w", [.command])])   // Close All Editors
+            return "\(app.name): closed all tabs"
         case .others:
             Keyboard.press(KeyCombo("t", [.option, .command]))
             return "\(app.name): closed the other tabs"
@@ -503,6 +517,8 @@ public final class ActionExecutor {
     /// Apps with a native tab bar: close each tab (its close button, else select it and ⌘W), highest first.
     private func closeNativeTabs(_ set: TabSet, app: AppInfo) throws -> String {
         guard let tabs = AppTabs.readNative(pid: app.pid) else { return "\(app.name) has only one tab" }
+        // Apps with window tabs cannot keep an empty tab: "all" keeps the current one.
+        let set = set == .all ? .others : set
         let (close, keep) = BrowserControl.indices(of: set, count: tabs.tabs.count, active: max(tabs.active, 1))
         guard !close.isEmpty else { return "No tabs to close" }
         let activeTitle = tabs.active > 0 ? tabs.titles[tabs.active - 1] : nil
