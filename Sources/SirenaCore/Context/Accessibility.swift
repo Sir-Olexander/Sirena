@@ -242,15 +242,20 @@ public enum AX {
 
     /// Finds the first element whose label matches `query` (fuzzy).
     public static func find(label query: String, in elements: [UIElementInfo], preferInputs: Bool = false) -> UIElementInfo? {
-        var best: (UIElementInfo, Double)?
-        for e in elements where !e.name.isEmpty {
-            var s = Fuzzy.score(query: query, candidate: e.name)
-            if preferInputs, e.isTextInput { s += 0.1 }
-            if !e.isEnabled { s -= 0.2 }
-            if best == nil || s > best!.1 { best = (e, s) }
+        func best(_ q: String) -> (UIElementInfo, Double)? {
+            var best: (UIElementInfo, Double)?
+            for e in elements where !e.name.isEmpty {
+                var s = Fuzzy.score(query: q, candidate: e.name)
+                if preferInputs, e.isTextInput { s += 0.1 }
+                if !e.isEnabled { s -= 0.2 }
+                if best == nil || s > best!.1 { best = (e, s) }
+            }
+            return best
         }
-        if let b = best, b.1 >= 0.6 { return b.0 }
-        return nil
+        if let b = best(query), b.1 >= 0.6 { return b.0 }
+        // "click send" on a Mac in Portuguese: the same label in the other language.
+        let translated = LabelSynonyms.alternatives(query).compactMap(best).filter { $0.1 >= 0.8 }
+        return translated.max { $0.1 < $1.1 }?.0
     }
 
     /// Clicks an element: AXPress first, then a synthetic click at its center.

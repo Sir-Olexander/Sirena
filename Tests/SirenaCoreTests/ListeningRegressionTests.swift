@@ -397,3 +397,25 @@ final class LearningTests: XCTestCase {
         XCTAssertNil(s.suggestion(UUID(uuidString: "041F3B31-F775-4D87-AD9F-33192A5925E7")!))
     }
 }
+
+/// Smaller findings: "Visual Studio" opened instead of switching; "click send" needed the model for “Enviar”.
+final class SmallFixesTests: XCTestCase {
+    func testVisualStudioIsCode() {
+        let code = AppInfo(name: "Code", bundleId: "com.microsoft.VSCode", pid: 4242, app: NSRunningApplication.current)
+        let chrome = AppInfo(name: "Google Chrome", bundleId: "com.google.Chrome", pid: 4343, app: NSRunningApplication.current)
+        XCTAssertEqual(RunningApps.match("visual studio", in: [chrome, code])?.pid, 4242)
+        XCTAssertEqual(RunningApps.match("Visual Studio.", in: [chrome, code])?.pid, 4242)
+    }
+
+    func testPortugueseLabels() {
+        XCTAssertTrue(LabelSynonyms.alternatives("send").contains("enviar"))
+        XCTAssertTrue(LabelSynonyms.alternatives("guardar").contains("save"))
+        XCTAssertTrue(LabelSynonyms.alternatives("new tab").contains("novo separador"))
+        let ax = AXElement(AXUIElementCreateSystemWide())
+        let els = [UIElementInfo(id: 1, element: ax, role: "AXButton", subrole: nil, name: "Anexar", frame: .zero, isFocused: false, isEnabled: true),
+                   UIElementInfo(id: 2, element: ax, role: "AXButton", subrole: nil, name: "Enviar", frame: .zero, isFocused: false, isEnabled: true)]
+        XCTAssertEqual(AX.find(label: "send", in: els)?.id, 2)
+        XCTAssertEqual(AX.find(label: "attach", in: els)?.id, 1)
+        XCTAssertNil(AX.find(label: "delete", in: els))
+    }
+}

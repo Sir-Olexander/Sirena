@@ -178,6 +178,7 @@ public final class ActionExecutor {
         case .launchApp(let name):
             if let app = RunningApps.match(name, in: snap.apps) { return activate(app, snapshot: &snap) }
             guard let url = RunningApps.installedAppURL(named: name) else { throw ExecutionError.unresolved(name) }
+            if let app = RunningApps.running(at: url, in: snap.apps) { return activate(app, snapshot: &snap) }
             RunningApps.launch(url: url)
             return "Opening \(url.deletingPathExtension().lastPathComponent)"
         case .switchTab(let target):
@@ -352,6 +353,7 @@ public final class ActionExecutor {
         if let m = WakeWord.normalize(target).firstMatch("^(.+?)\\s+(?:app|application)$") { target = m[1]; wantsApp = true }
         if let app = RunningApps.exactMatch(target, in: snap.apps) { return activate(app, snapshot: &snap) }
         if let url = RunningApps.installedAppURL(exactly: target) {
+            if let app = RunningApps.running(at: url, in: snap.apps) { return activate(app, snapshot: &snap) }
             RunningApps.launch(url: url)
             return "Opening \(url.deletingPathExtension().lastPathComponent)"
         }
@@ -426,8 +428,9 @@ public final class ActionExecutor {
         }
         // 4. a website by name ("switch to YouTube" with no YouTube tab open)
         if let url = Websites.url(for: target) { return openWebsite(url, snapshot: &snap) }
-        // 5. an installed app
+        // 5. an installed app (already running under another name: "Visual Studio" is "Code")
         if let url = RunningApps.installedAppURL(named: target) {
+            if let app = RunningApps.running(at: url, in: snap.apps) { return activate(app, snapshot: &snap) }
             RunningApps.launch(url: url)
             return "Opening \(url.deletingPathExtension().lastPathComponent)"
         }
