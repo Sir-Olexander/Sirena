@@ -185,7 +185,7 @@ public final class CommandPipeline {
                 log(text, route: "ignored (no name)", layer: nil, actions: nil, result: "needs the name", latency: latency)
                 return
             }
-            if action == .repeatLast { await repeatLast(text, latency: latency); return }
+            if action == .repeatLast { await repeatLast(text, latency: latency, requireSafe: fastPathOnly); return }
             runControl(action, label: control.label)
             log(text, route: "control", layer: "fast", actions: [action], result: "ok", latency: latency)
             return
@@ -275,7 +275,7 @@ public final class CommandPipeline {
         latency.planMs = Int(Date().timeIntervalSince(t0) * 1000)
         latency.layer = "fast"
         if let action = parsed.actions.first, action.isControl, parsed.actions.count == 1 {
-            if action == .repeatLast { await repeatLast(text, latency: latency); return }
+            if action == .repeatLast { await repeatLast(text, latency: latency, requireSafe: true); return }
             runControl(action, label: parsed.label)
             log(text, route: "control", layer: "fast", actions: [action], result: "ok", latency: latency)
             return
@@ -307,11 +307,16 @@ public final class CommandPipeline {
     }
 
     /// "again", "more": the last command that ran without the model, once more.
-    private func repeatLast(_ text: String, latency: LatencyReport) async {
+    /// - Parameter requireSafe: said without the name: only a command that is itself safe without the name repeats.
+    private func repeatLast(_ text: String, latency: LatencyReport, requireSafe: Bool = false) async {
         var latency = latency
         guard let last = lastRepeatable, Date().timeIntervalSince(last.at) < 120 else {
             overlay.showWorking("Nothing to repeat", autoClear: 2)
             log(text, route: "control", layer: "fast", actions: [.repeatLast], result: "nothing to repeat", latency: latency)
+            return
+        }
+        if requireSafe, !FastPathParser.isSafeWithoutName(ParsedCommand(last.actions, label: last.label)) {
+            log(text, route: "ignored (no name)", layer: nil, actions: nil, result: "needs the name to repeat “\(last.label)”", latency: latency)
             return
         }
         overlay.showWorking(last.label, autoClear: 2.5)
