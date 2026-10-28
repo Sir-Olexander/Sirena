@@ -163,11 +163,28 @@ public final class ActionExecutor {
         case .switchTab(let target):
             return try switchTab(target, snapshot: &snap)
         case .closeTab:
-            Keyboard.press(KeyCombo("w", [.command])); return "Closed tab"
+            return try closeCurrentTab(snapshot: &snap)
         case .closeTabs(let set):
             return try closeTabs(set, snapshot: &snap)
         case .newTab:
-            Keyboard.press(KeyCombo("t", [.command])); return "New tab"
+            let host = try tabHost(snapshot: &snap)
+            if case .editor = host { Keyboard.press(KeyCombo("n", [.command])) } else { Keyboard.press(KeyCombo("t", [.command])) }
+            return "New tab"
+        case .inApp(let name, let inner):
+            if let app = RunningApps.exactMatch(name, in: snap.apps) ?? RunningApps.match(name, in: snap.apps) {
+                if snap.frontApp?.pid != app.pid { _ = activate(app, snapshot: &snap) }
+            } else if let url = RunningApps.installedAppURL(named: name) {
+                RunningApps.launch(url: url)
+                usleep(1_500_000)
+                snap = context.snapshot(includeElements: false, includeBrowser: false)
+            } else {
+                throw ExecutionError.unresolved(name)
+            }
+            return try perform(inner, snapshot: &snap)
+        case .copyText(let q), .selectText(let q):
+            var isCopy = false
+            if case .copyText = action { isCopy = true }
+            return try copyOrSelect(q, copy: isCopy, snapshot: snap)
         case .reopenTab:
             Keyboard.press(KeyCombo("t", [.command, .shift])); return "Reopened tab"
         case .reload:
@@ -262,7 +279,7 @@ public final class ActionExecutor {
             throw ExecutionError.needsScreen(goal)
         case .wait, .turnOff, .startDictation, .stopDictation, .showNumbers, .hideNumbers, .undo, .cancel, .newLine, .deleteLastChunk,
              .readSelection, .readArticle, .readPage, .readingControl, .forgetLearnedShortcut,
-             .openNotesWindow, .openShortcutsWindow, .openHistoryWindow:
+             .openNotesWindow, .openShortcutsWindow, .openHistoryWindow, .readText:
             return ""   // control actions are handled by the listening controller
         }
     }
@@ -381,13 +398,12 @@ public final class ActionExecutor {
 
     /// Closes exactly the tabs a `TabSet` covers, from the browser's real tab list (no model, same every time).
     private func closeTabs(_ set: TabSet, snapshot snap: inout ScreenSnapshot) throws -> String {
-        var app = snap.frontApp
-        if app == nil || !BrowserControl.isBrowser(app!.bundleId) {
-            guard let b = BrowserControl.preferredRunningBrowser(apps: snap.apps) else { throw ExecutionError.failed("No browser is open") }
-            _ = activate(b, snapshot: &snap)
-            app = b
+        let browser: AppInfo
+        switch try tabHost(snapshot: &snap) {
+        case .browser(let b): browser = b
+        case .editor(let app): return closeEditorTabs(set, app: app)
+        case .native(let app): return try closeNativeTabs(set, app: app)
         }
-        guard let browser = app else { throw ExecutionError.failed("No browser") }
         // Always a fresh tab list: a cached one could close the wrong tabs.
         guard let info = BrowserControl.info(for: browser) else {
             throw ExecutionError.failed("\(browser.name) did not share its tabs — allow Sirena under System Settings → Privacy & Security → Automation")
@@ -412,20 +428,127 @@ public final class ActionExecutor {
         return what == "other" ? "Closed \(n) other tab\(n == 1 ? "" : "s")" : "Closed \(n) tab\(n == 1 ? "" : "s") \(what)"
     }
 
-    private func switchTab(_ target: TabTarget, snapshot snap: inout ScreenSnapshot) throws -> String {
-        var app = snap.frontApp
-        if app == nil || !BrowserControl.isBrowser(app!.bundleId) {
-            guard let b = BrowserControl.preferredRunningBrowser(apps: snap.apps) else { throw ExecutionError.failed("No browser is open") }
-            _ = activate(b, snapshot: &snap)
-            app = b
+    // MARK: - Tabs of the front app
+
+    enum TabHost { case browser(AppInfo), editor(AppInfo), native(AppInfo) }
+
+    /// Tab commands act on the app in front when it has tabs; only otherwise on a browser.
+    private func tabHost(snapshot snap: inout ScreenSnapshot) throws -> TabHost {
+        if let f = snap.frontApp, f.bundleId != Bundle.main.bundleIdentifier, let kind = AppTabs.kind(of: f) {
+            switch kind {
+            case .browser: return .browser(f)
+            case .editor: return .editor(f)
+            case .native: return .native(f)
+            }
         }
-        guard let browser = app else { throw ExecutionError.failed("No browser") }
+        guard let b = BrowserControl.preferredRunningBrowser(apps: snap.apps) else {
+            throw ExecutionError.failed("\(snap.frontApp?.name ?? "This app") has no tabs and no browser is open")
+        }
+        _ = activate(b, snapshot: &snap)
+        return .browser(b)
+    }
+
+    /// VS Code-style editors: ⌥⌘T closes the other editors; the command palette closes to the right / left.
+    private func closeEditorTabs(_ set: TabSet, app: AppInfo) -> String {
+        switch set {
+        case .others:
+            Keyboard.press(KeyCombo("t", [.option, .command]))
+            return "\(app.name): closed the other tabs"
+        case .allExcept(let keep):
+            if let keys = AppTabs.editorKeys(for: keep) { Keyboard.press(keys); usleep(150_000) }
+            Keyboard.press(KeyCombo("t", [.option, .command]))
+            return "\(app.name): closed all tabs but \(TabTargetText.describe(keep))"
+        case .right, .left:
+            Keyboard.press(KeyCombo("p", [.command, .shift])); usleep(300_000)
+            Keyboard.typeUnicode(AppTabs.editorPaletteCommand(for: set) ?? ""); usleep(450_000)
+            Keyboard.press(KeyCombo("return"))
+            return "\(app.name): closed the tabs to the \(set == .right ? "right" : "left")"
+        }
+    }
+
+    /// Apps with a native tab bar: close each tab (its close button, else select it and ⌘W), highest first.
+    private func closeNativeTabs(_ set: TabSet, app: AppInfo) throws -> String {
+        guard let tabs = AppTabs.readNative(pid: app.pid) else { return "\(app.name) has only one tab" }
+        let (close, keep) = BrowserControl.indices(of: set, count: tabs.tabs.count, active: max(tabs.active, 1))
+        guard !close.isEmpty else { return "No tabs to close" }
+        let activeTitle = tabs.active > 0 ? tabs.titles[tabs.active - 1] : nil
+        let keepTitle = keep.map { tabs.titles[$0 - 1] } ?? activeTitle
+        var closed = 0
+        for i in close.sorted(by: >) {
+            guard let fresh = AppTabs.readNative(pid: app.pid), i <= fresh.tabs.count else { break }
+            let tab = fresh.tabs[i - 1]
+            // Select it and ⌘W (the tab's own close button is hidden until hover and may ignore presses).
+            tab.perform(kAXPressAction)
+            usleep(150_000)
+            Keyboard.press(KeyCombo("w", [.command]))
+            usleep(250_000)
+            if (AppTabs.readNative(pid: app.pid)?.tabs.count ?? 0) >= fresh.tabs.count {
+                _ = pressCloseButton(of: tab)
+                usleep(250_000)
+            }
+            if (AppTabs.readNative(pid: app.pid)?.tabs.count ?? 1) < fresh.tabs.count || fresh.tabs.count == 2 { closed += 1 }
+        }
+        if let title = keepTitle, let fresh = AppTabs.readNative(pid: app.pid), let k = fresh.titles.firstIndex(of: title) {
+            fresh.tabs[k].perform(kAXPressAction)
+        }
+        return "\(app.name): closed \(closed) tab\(closed == 1 ? "" : "s")"
+    }
+
+    private func switchTab(_ target: TabTarget, snapshot snap: inout ScreenSnapshot) throws -> String {
+        switch try tabHost(snapshot: &snap) {
+        case .browser(let browser):
+            return try switchBrowserTab(target, browser: browser)
+        case .editor(let app):
+            if case .title(let t) = target {
+                // Quick Open finds an editor by name.
+                Keyboard.press(KeyCombo("p", [.command])); usleep(250_000)
+                Keyboard.typeUnicode(t); usleep(350_000)
+                Keyboard.press(KeyCombo("return"))
+                return "\(app.name): “\(t)”"
+            }
+            guard let keys = AppTabs.editorKeys(for: target) else { throw ExecutionError.failed("No such tab") }
+            Keyboard.press(keys)
+            return "\(app.name): \(TabTargetText.describe(target))"
+        case .native(let app):
+            guard let tabs = AppTabs.readNative(pid: app.pid) else {
+                // One tab (no tab bar shown): only next/previous make sense, through the standard shortcuts.
+                switch target {
+                case .next: Keyboard.press(AppTabs.nextTab); return "\(app.name): next tab"
+                case .previous: Keyboard.press(AppTabs.previousTab); return "\(app.name): previous tab"
+                default: return "\(app.name) has only one tab"
+                }
+            }
+            let count = tabs.tabs.count, active = max(tabs.active, 1)
+            let idx: Int?
+            switch target {
+            case .index(let n): idx = (1...count).contains(n) ? n : nil
+            case .first: idx = 1
+            case .last: idx = count
+            case .next: idx = active % count + 1
+            case .previous: idx = (active - 2 + count) % count + 1
+            case .title(let t): idx = Fuzzy.best(t, in: Array(tabs.titles.enumerated()), name: { $0.element }, threshold: 0.55).map { $0.item.offset + 1 }
+            }
+            guard let i = idx else {
+                if case .title(let t) = target { throw ExecutionError.unresolved(t) }
+                throw ExecutionError.failed("\(app.name) has \(count) tab\(count == 1 ? "" : "s")")
+            }
+            if !tabs.tabs[i - 1].perform(kAXPressAction) {
+                if case .next = target { Keyboard.press(AppTabs.nextTab) }
+                else if case .previous = target { Keyboard.press(AppTabs.previousTab) }
+                else { Mouse.click(at: CGPoint(x: tabs.tabs[i - 1].frame?.midX ?? 0, y: tabs.tabs[i - 1].frame?.midY ?? 0)) }
+            }
+            return "\(app.name): tab \(i) “\(tabs.titles[i - 1].prefix(30))”"
+        }
+    }
+
+    private func switchBrowserTab(_ target: TabTarget, browser: AppInfo) throws -> String {
         if let info = context.browserInfo(for: browser) {
             guard let idx = BrowserControl.resolve(target, in: info) else {
                 if case .title(let t) = target { throw ExecutionError.unresolved(t) }
                 throw ExecutionError.failed("No such tab")
             }
             BrowserControl.activateTab(index: idx, in: info)
+            context.invalidateBrowserCache()
             undoStack.append(.tabSwitched(browser: info, previousIndex: info.activeIndex))
             let title = info.tabs.first { $0.index == idx }?.title ?? ""
             return "Tab \(idx) “\(title.prefix(30))”"
@@ -440,6 +563,45 @@ public final class ActionExecutor {
         case .index: throw ExecutionError.failed("Tab index too high without Automation permission")
         case .title(let t): throw ExecutionError.unresolved(t)
         }
+    }
+
+    private func closeCurrentTab(snapshot snap: inout ScreenSnapshot) throws -> String {
+        let host = try tabHost(snapshot: &snap)
+        Keyboard.press(KeyCombo("w", [.command]))
+        context.invalidateBrowserCache()
+        switch host {
+        case .browser(let b), .editor(let b), .native(let b): return "Closed the tab in \(b.name)"
+        }
+    }
+
+    /// Closes a native tab by its own close button when it has one.
+    private func pressCloseButton(of tab: AXElement) -> Bool {
+        for child in tab.children where child.role == "AXButton" {
+            let sub = child.subrole ?? "", label = child.label.lowercased()
+            if sub == "AXCloseButton" || label.contains("close") || label.contains("fechar") {
+                return child.perform(kAXPressAction)
+            }
+        }
+        return false
+    }
+
+    // MARK: - Copy / select text on screen
+
+    private func copyOrSelect(_ q: TextQuery, copy: Bool, snapshot snap: ScreenSnapshot) throws -> String {
+        guard let front = snap.frontApp else { throw ExecutionError.failed("No app in front") }
+        guard let r = PageText.resolve(q, pid: front.pid), !r.text.isEmpty else {
+            throw ExecutionError.failed("Couldn't find \(q.spoken) in \(front.name)")
+        }
+        let selected = PageText.select(r)
+        let preview = r.text.split(separator: " ").prefix(8).joined(separator: " ") + (r.text.split(separator: " ").count > 8 ? "…" : "")
+        if copy {
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(r.text, forType: .string)
+            return "Copied “\(preview)”"
+        }
+        guard selected else { throw ExecutionError.failed("Found \(q.spoken) but couldn't select it on screen — say “copy …” to copy it") }
+        return "Selected “\(preview)”"
     }
 
     private func scroll(_ dir: ScrollDirection, _ amount: ScrollAmount, snapshot snap: ScreenSnapshot) {
@@ -550,3 +712,17 @@ public final class ActionExecutor {
 extension ActionExecutor: @unchecked Sendable {}
 extension ScreenSnapshot: @unchecked Sendable {}
 extension Action: @unchecked Sendable {}
+
+
+enum TabTargetText {
+    static func describe(_ t: TabTarget) -> String {
+        switch t {
+        case .index(let n): return "tab \(n)"
+        case .first: return "first tab"
+        case .last: return "last tab"
+        case .next: return "next tab"
+        case .previous: return "previous tab"
+        case .title(let s): return "“\(s)”"
+        }
+    }
+}

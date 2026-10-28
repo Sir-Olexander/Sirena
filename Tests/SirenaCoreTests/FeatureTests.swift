@@ -1,4 +1,5 @@
 import XCTest
+import ApplicationServices
 @testable import SirenaCore
 
 final class FeatureTests: XCTestCase {
@@ -96,6 +97,84 @@ final class FeatureTests: XCTestCase {
         XCTAssertEqual(BrowserControl.indices(of: .allExcept(.last), count: 5, active: 3).keep, 5)
         XCTAssertEqual(BrowserControl.indices(of: .right, count: 3, active: 3).close, [])
         XCTAssertEqual(BrowserControl.indices(of: .allExcept(.index(9)), count: 3, active: 1).close, [])
+    }
+
+    func testTabCommandsAndAppQualifiers() {
+        func parse(_ s: String) -> [Action]? { FastPathParser.parse(s)?.actions }
+        XCTAssertEqual(parse("switch to the second tab"), [.switchTab(.index(2))])
+        XCTAssertEqual(parse("switch to the second tab in VS Code"), [.inApp("vs code", .switchTab(.index(2)))])
+        XCTAssertEqual(parse("Inside VS Code, switch to the second tab."), [.inApp("vs code", .switchTab(.index(2)))])
+        XCTAssertEqual(parse("Chrome tab 2"), [.inApp("chrome", .switchTab(.index(2)))])
+        XCTAssertEqual(parse("go to chrome tab three"), [.inApp("chrome", .switchTab(.index(3)))])
+        XCTAssertEqual(parse("close the other tabs in Finder"), [.inApp("finder", .closeTabs(.others))])
+        XCTAssertEqual(parse("next tab in terminal"), [.inApp("terminal", .switchTab(.next))])
+        XCTAssertEqual(parse("close all tabs to the right of this one"), [.closeTabs(.right)])
+        XCTAssertEqual(parse("switch to the youtube tab in safari"), [.inApp("safari", .switchTab(.title("youtube")))])
+        XCTAssertEqual(AppTabs.editorKeys(for: .index(2)), [KeyCombo("2", [.control])])
+        XCTAssertEqual(AppTabs.editorKeys(for: .last), [KeyCombo("0", [.control])])
+        XCTAssertEqual(AppTabs.cleanTitle("(73) WhatsApp - Google Chrome – Alexandre"), "WhatsApp")
+    }
+
+    func testCopySelectReadQueries() {
+        func parse(_ s: String) -> [Action]? { FastPathParser.parse(s)?.actions }
+        XCTAssertEqual(parse("copy the first paragraph"), [.copyText(.paragraph(1))])
+        XCTAssertEqual(parse("Copy the paragraph about Arthur Morgan's early life."), [.copyText(.paragraphAbout("arthur morgan's early life"))])
+        XCTAssertEqual(parse("copy the paragraph that starts with Arthur Morgan is"), [.copyText(.paragraphStarting("arthur morgan is"))])
+        XCTAssertEqual(parse("copy the title"), [.copyText(.title)])
+        XCTAssertEqual(parse("copy the page title"), [.copyText(.title)])
+        XCTAssertEqual(parse("copy the second sentence"), [.copyText(.sentence(2))])
+        XCTAssertEqual(parse("copy the last message"), [.copyText(.lastMessage(1))])
+        XCTAssertEqual(parse("copy the last paragraph"), [.copyText(.paragraph(-1))])
+        XCTAssertEqual(parse("copy this paragraph"), [.copyText(.visibleParagraph)])
+        XCTAssertEqual(parse("select the paragraph Obrash."), [.selectText(.paragraphAbout("obrash"))])
+        XCTAssertEqual(parse("read the second paragraph"), [.readText(.paragraph(2))])
+        XCTAssertEqual(parse("copy"), [.pressKeys(KeyCombo("c", [.command]))])
+        XCTAssertEqual(parse("copy that"), [.pressKeys(KeyCombo("c", [.command]))])
+        XCTAssertFalse(FastPathParser.looksLikeTextEdit("copy the average paragraph"))
+        XCTAssertNil(FastPathParser.editTextCommand("select the paragraph about the list"))
+    }
+
+    func testScreenAgentRouting() {
+        let busy = RouterContext(state: .awake, inFollowUpWindow: true, screenAgentBusy: true)
+        XCTAssertEqual(UtteranceRouter.route("open the first conversation", context: busy), .ignore("screen agent busy"))
+        XCTAssertEqual(UtteranceRouter.route("Sirena, switch to Finder", context: busy), .ignore("screen agent busy"))
+        XCTAssertEqual(UtteranceRouter.route("cancel", context: busy), .command("cancel"))
+        XCTAssertEqual(UtteranceRouter.route("Sirena, stop.", context: busy), .command("cancel"))
+        let asking = RouterContext(state: .awake, hasPendingConfirmation: true, screenAgentBusy: true)
+        XCTAssertEqual(UtteranceRouter.route("Yes.", context: asking), .confirm(true))
+        XCTAssertEqual(UtteranceRouter.route("cancel", context: asking), .confirm(false))
+    }
+
+    func testParagraphMatching() {
+        func block(_ t: String, heading: Bool = false) -> TextBlock {
+            TextBlock(text: t, isHeading: heading, words: t.split(separator: " ").count, linkWords: 0, element: nil, clickRun: nil, range: nil, textElement: nil, frame: nil)
+        }
+        let all = [
+            block("Arthur Morgan", heading: true),
+            block("Arthur Morgan is a fictional character and the main protagonist of the 2018 video game Red Dead Redemption 2."),
+            block("Early life", heading: true),
+            block("Morgan was born in 1863 to Lyle Morgan and Beatrice Morgan, and lost his mother at a young age."),
+            block("Reception of the character was positive, with critics praising the writing and Roger Clark's performance."),
+        ]
+        let prose = all.filter { $0.isProse }
+        XCTAssertEqual(PageText.about("early life", blocks: all, prose: prose)?.text.prefix(16), "Morgan was born ")
+        XCTAssertEqual(PageText.about("critics and reception", blocks: all, prose: prose)?.text.prefix(9), "Reception")
+        XCTAssertEqual(PageText.starting("Arthur Morgan is a", prose: prose)?.text.prefix(16), "Arthur Morgan is")
+        XCTAssertNil(PageText.about("quantum physics", blocks: all, prose: prose))
+        let area = PageText.textViewBlocks(AXElement(AXUIElementCreateSystemWide()), value: "Title\nFirst paragraph here.\n\nSecond one.")
+        XCTAssertEqual(area.map(\.text), ["Title", "First paragraph here.", "Second one."])
+        XCTAssertEqual(area[1].range, NSRange(location: 6, length: 21))
+    }
+
+    func testEditorRefusesNonEdits() async {
+        let d = DictationEngine(clientProvider: { nil }, modelName: { "" }, skipCleanup: { true })
+        let editor = DictationEditor(dictation: d, clientProvider: { nil }, modelName: { "" })
+        do {
+            _ = try await editor.edit(instruction: "copy the average paragraph")
+            XCTFail("should refuse")
+        } catch let e as ExecutionError {
+            XCTAssertEqual(e, .failed("That isn't a text edit"))
+        } catch { XCTFail("\(error)") }
     }
 
     func testRunPrefix() {

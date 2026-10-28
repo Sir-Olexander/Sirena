@@ -48,10 +48,14 @@ mic ──► Muse Voice Transcribe (ENDPOINTING) ──► utterance router ─
   violet. Optional per-stage latency (speech recognition · understanding · action).
 * **Several screens.** "Sirena, move this window to the other screen / the left monitor / screen 2" and
   "Sirena, switch to the other screen" (focuses the topmost window there and moves the pointer).
+* **Copy text without selecting it.** "Copy the first paragraph / the paragraph about … / the paragraph that starts with …
+  / the title / the second sentence / the last message" finds the text through Accessibility (the article only, skipping
+  menus, sidebars, ads and reference lists), puts it on the clipboard, selects it on screen and shows the first words.
 * **Lists and text edits in dictation.** "first point…", "point two…", "next item…", "ponto três…" said in
   separate pauses land on their own line, correctly numbered (continuing a list already in the field).
   "Sirena, make that a list", "separate the points with two line breaks", "fix the grammar" rewrite the text
-  dictated in this session in place; text edits never go to the screenshot fallback.
+  dictated in this session in place; text edits never go to the screenshot fallback, run only on dictated text, a
+  selection in an editable field or an editable field's contents, and are never used to copy, select or read.
 * **Read aloud.** "Sirena, read this" (selection), "read the article" (main content only, skipping menus,
   sidebars and ads), "read the page" (all visible text). While reading, "stop", "pause", "resume", "faster",
   "slower" work without the name. Sirena's own voice is echo-cancelled and filtered by matching the text being read.
@@ -77,6 +81,10 @@ mic ──► Muse Voice Transcribe (ENDPOINTING) ──► utterance router ─
   `~/Library/Application Support/Sirena/history.jsonl`. No audio is stored. The history window groups it by
   session, with search, filters by type and layer, latency, and "Run again".
 
+While the screenshot fallback works, other speech does not interrupt it: only "cancel", "stop" or the answer to its
+confirmation. Its confirmations name the item it will act on ("Click “Mark” (the first item in the “Chats” list) in
+WhatsApp?"), never a window or page title.
+
 ## Requirements
 
 * macOS 14 or later, Apple silicon or Intel.
@@ -91,7 +99,8 @@ export MODEL_API_KEY="LLM|…"        # or SIRENA_API_KEY
 scripts/run.sh                      # builds, signs, launches build/Sirena.app
 ```
 
-`scripts/build-app.sh` compiles with SwiftPM, assembles `build/Sirena.app`, and signs it with your
+`scripts/build-app.sh` compiles with SwiftPM (release builds use per-file optimization: Swift 6.2's whole-module
+optimizer hangs on this code base), assembles `build/Sirena.app`, and signs it with your
 Apple Development identity (set `SIRENA_SIGN_IDENTITY` to pick one). Signing with the same identity every
 time keeps the permission grants across rebuilds. Without an identity it falls back to an ad-hoc signature,
 which makes macOS forget the permissions after each rebuild.
@@ -142,7 +151,9 @@ Click the gray dot (or the menu bar icon, or press ⌃⌥⌘S). Then:
 | Say | What happens |
 |---|---|
 | "Sirena, switch to Chrome" / "switch to the Google page" | app, browser tab or window brought to the front |
-| "Sirena, go to the first tab" · "next tab" · "tab 3" · "close tab" | tabs in Chrome, Safari, Arc, Brave, Edge |
+| "Sirena, go to the first tab" · "next tab" · "tab 3" · "close tab" · "close the tabs to the right" | tabs of the app in front: browsers, VS Code (by position), Finder, Terminal, Xcode…; a browser only when the front app has no tabs |
+| "Sirena, Chrome tab 2" · "switch to the second tab in VS Code" | tabs of a named app |
+| "Sirena, copy the first paragraph" · "copy the paragraph about …" · "copy the paragraph that starts with …" · "copy the title" · "copy the second sentence" · "copy the last message" | copies it (and selects it on screen); "select …" / "read …" work the same way |
 | "Sirena, command tab" · "alt tab" · "control c" · "alt F4" | shortcuts, Windows wording mapped to the Mac |
 | "Sirena, scroll down" · "scroll up a bit" · "page down" · "scroll to the top" | scrolling |
 | "Sirena, click Send" · "click the Reply button" · "focus the search field" | by accessibility label |

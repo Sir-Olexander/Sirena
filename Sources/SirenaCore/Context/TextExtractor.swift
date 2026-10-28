@@ -47,7 +47,10 @@ public enum TextExtractor {
                                                    "AXLandmarkSearch", "AXLandmarkForm"]
     static let boilerplateClassWords = ["advert", "ad-", "-ad", "ads", "sponsor", "promo", "sidebar", "related", "newsletter", "cookie",
                                         "comment", "share", "social", "footer", "nav", "menu", "banner", "subscribe", "popup", "modal",
-                                        "recommend", "trending", "outbrain", "taboola"]
+                                        "recommend", "trending", "outbrain", "taboola",
+                                        // Wikipedia and similar: references, infoboxes, navigation boxes, edit links
+                                        "reflist", "references", "mw-references", "citation", "footnote", "navbox", "catlinks",
+                                        "infobox", "hatnote", "mw-editsection", "printfooter", "toc", "sistersitebox", "metadata"]
 
     /// All visible text of the front window, in reading order.
     public static func pageText(pid: pid_t) -> String {

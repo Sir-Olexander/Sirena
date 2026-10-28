@@ -26,7 +26,9 @@ public final class ModelCommandPlanner {
     Guidelines:
     - Prefer the cheapest direct action: activate_app for app switching, switch_tab for browser tabs, press_keys for shortcuts, click_element / focus_element with the exact label from the element list.
     - "open X": use open (an exact app name opens the app; a website name such as Google, YouTube or Gmail opens the site in the browser in front).
-    - Requests to change the wording or formatting of text the user dictated or that is in the focused text field ("make that a list", "separate the points with two line breaks", "fix the grammar") → edit_text with the instruction. Never use need_screen for text edits.
+    - Requests to change the wording or formatting of text the user dictated, selected, or that is in the focused editable field ("make that a list", "separate the points with two line breaks", "fix the grammar") → edit_text with the instruction. Never use need_screen for text edits.
+    - To copy, select or read a piece of the text on screen (a paragraph, a sentence, the title, the last message) use copy_text. Never use edit_text to copy, select or read.
+    - Tab commands act on the tabs of the app in front (VS Code, Finder, Terminal, Xcode…), not a browser. Pass app only when the user names one ("Chrome tab 2").
     - Several screens: move_window_to_screen and focus_screen (targets: next, previous, other, left, right, main, built-in, external, or a number from the Screens line).
     - read_aloud reads the selection, the article or the page. save_note saves a note without leaving the app. choose_menu_item picks a menu bar item by path.
     - "Windows" phrasing maps to the Mac equivalent (Alt+Tab → cmd+tab, Ctrl+C → cmd+c, Alt+F4 → cmd+q, F5 → cmd+r).
@@ -43,8 +45,14 @@ public final class ModelCommandPlanner {
                  parameters: ["type": "object", "properties": ["keys": ["type": "string", "description": "Keys joined with +, modifiers: cmd, shift, option, ctrl, fn"]], "required": ["keys"]]),
         ChatTool(name: "activate_app", description: "Bring a running app to the front (launches it if it is installed but not running).",
                  parameters: ["type": "object", "properties": ["name": ["type": "string"]], "required": ["name"]]),
-        ChatTool(name: "switch_tab", description: "Switch to a browser tab by 1-based index or by title.",
-                 parameters: ["type": "object", "properties": ["index": ["type": "integer"], "title": ["type": "string"]], "required": []]),
+        ChatTool(name: "switch_tab", description: "Switch tabs in the front app (browser, VS Code, Finder, Terminal…) by 1-based position or by title. app: only when the user names an app.",
+                 parameters: ["type": "object", "properties": ["index": ["type": "integer"], "title": ["type": "string"], "which": ["type": "string", "enum": ["next", "previous", "first", "last"]], "app": ["type": "string"]], "required": []]),
+        ChatTool(name: "copy_text", description: "Copy, select or read a piece of the text shown in the front window: a paragraph by position, the paragraph about a topic or starting with some words, the title, a sentence, or the last message of a chat.",
+                 parameters: ["type": "object", "properties": [
+                    "action": ["type": "string", "enum": ["copy", "select", "read"]],
+                    "what": ["type": "string", "enum": ["paragraph", "sentence", "title", "last_message", "this_paragraph"]],
+                    "index": ["type": "integer", "description": "1-based; -1 for the last"],
+                    "about": ["type": "string"], "starts_with": ["type": "string"]], "required": ["action", "what"]]),
         ChatTool(name: "focus_element", description: "Put the keyboard focus into a text field or element with this label.",
                  parameters: ["type": "object", "properties": ["label": ["type": "string"]], "required": ["label"]]),
         ChatTool(name: "focus_composer", description: "Focus the main message box / chat input of the front window.",
@@ -63,7 +71,7 @@ public final class ModelCommandPlanner {
                  parameters: ["type": "object", "properties": ["message": ["type": "string", "description": "Short question, e.g. 'Send this message?'"]], "required": ["message"]]),
         ChatTool(name: "open", description: "Open an app or a website by name ('Notes', 'Google', 'YouTube', 'github.com'). Exact app names open the app; website names open in the front browser.",
                  parameters: ["type": "object", "properties": ["name": ["type": "string"]], "required": ["name"]]),
-        ChatTool(name: "edit_text", description: "Rewrite or reformat the text the user just dictated (else the selection or the focused field) following the instruction.",
+        ChatTool(name: "edit_text", description: "Rewrite or reformat text the user dictated, selected, or that is in the focused editable field, following the instruction. Never for copying, selecting or reading.",
                  parameters: ["type": "object", "properties": ["instruction": ["type": "string"]], "required": ["instruction"]]),
         ChatTool(name: "move_window_to_screen", description: "Move the front window to another screen.",
                  parameters: ["type": "object", "properties": ["target": ["type": "string", "description": "next, previous, other, left, right, main, built-in, external, or a screen number"]], "required": ["target"]]),
@@ -189,9 +197,31 @@ public final class ModelCommandPlanner {
             guard let n = s("name"), !n.isEmpty else { return [] }
             return [.switchTo(n)]
         case "switch_tab":
-            if let i = args["index"]?.intValue, i > 0 { return [.switchTab(.index(i))] }
-            if let t = s("title"), !t.isEmpty { return [.switchTab(.title(t))] }
-            return []
+            var target: TabTarget?
+            if let i = args["index"]?.intValue, i > 0 { target = .index(i) }
+            else if let w = s("which") { target = ["next": .next, "previous": .previous, "first": .first, "last": .last][w] }
+            else if let t = s("title"), !t.isEmpty { target = .title(t) }
+            guard let tg = target else { return [] }
+            if let app = s("app"), !app.isEmpty { return [.inApp(app, .switchTab(tg))] }
+            return [.switchTab(tg)]
+        case "copy_text":
+            let q: TextQuery
+            let n = args["index"]?.intValue ?? 1
+            switch s("what") ?? "paragraph" {
+            case "title": q = .title
+            case "sentence": q = .sentence(n == 0 ? 1 : n)
+            case "last_message": q = .lastMessage(max(1, abs(n)))
+            case "this_paragraph": q = .visibleParagraph
+            default:
+                if let a = s("about"), !a.isEmpty { q = .paragraphAbout(a) }
+                else if let w = s("starts_with"), !w.isEmpty { q = .paragraphStarting(w) }
+                else { q = .paragraph(n == 0 ? 1 : n) }
+            }
+            switch s("action") ?? "copy" {
+            case "select": return [.selectText(q)]
+            case "read": return [.readText(q)]
+            default: return [.copyText(q)]
+            }
         case "focus_element":
             guard let l = s("label"), !l.isEmpty else { return [.focusComposer] }
             return [.focusElement(l)]

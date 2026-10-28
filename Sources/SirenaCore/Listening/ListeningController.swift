@@ -462,7 +462,7 @@ public final class ListeningController {
         }
         let ctx = RouterContext(state: state, isDictating: isDictating, hasPendingConfirmation: pipeline.hasPendingConfirmation,
                                 inFollowUpWindow: inFollowUpWindow, numbersVisible: numbers.isVisible, pushToTalk: pushToTalkKey,
-                                isReading: reader.isActive)
+                                isReading: reader.isActive, screenAgentBusy: pipeline.isScreenAgentRunning)
         let decision = forceDictation ? .dictation(text) : UtteranceRouter.route(text, context: ctx)
         Log.listening.info("utterance \"\(text, privacy: .public)\" → \(String(describing: decision), privacy: .public)")
         if state == .awake { resetIdleTimer() }
@@ -522,6 +522,8 @@ public final class ListeningController {
             history.append(HistoryEntry(utterance: text, route: "ignored (\(why))", latency: LatencyReport(asrMs: asrMs)))
             if state == .awake, !isDictating, why == "no name" {
                 overlay.showHint("Start with “Sirena” to give a command")
+            } else if why == "screen agent busy" {
+                overlay.showHint("Still looking at the screen — say “cancel” to stop it", autoClear: 3)
             }
         }
     }
@@ -576,7 +578,7 @@ public final class ListeningController {
             enqueueDictation { [dictation] in dictation.deleteLast() }
         case .say(let s):
             overlay.showMessage(s, autoClear: 6)
-        case .readSelection, .readArticle, .readPage:
+        case .readSelection, .readArticle, .readPage, .readText:
             startReading(action)
         case .readingControl(let c):
             if reader.isActive { reader.control(c) } else { overlay.showWorking("Not reading", autoClear: 1.5) }
@@ -597,6 +599,9 @@ public final class ListeningController {
             case .readSelection:
                 text = TextExtractor.selectedText() ?? ""
                 title = "Selection"
+            case .readText(let q):
+                if let f = front { text = PageText.resolve(q, pid: f.pid)?.text ?? "" }
+                title = q.spoken
             case .readArticle:
                 if let f = front { text = TextExtractor.articleText(pid: f.pid) }
                 title = front.flatMap { AXElement.application(pid: $0.pid).focusedWindow?.title } ?? "Article"

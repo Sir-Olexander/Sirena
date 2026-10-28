@@ -88,6 +88,7 @@ public enum FastPathParser {
     /// Looks like a request to edit text rather than to act on the screen.
     public static func looksLikeTextEdit(_ raw: String) -> Bool {
         let t = normalize(raw)
+        if t.firstMatch("^(copy|select|highlight|grab|read|find|search|open|show|go|switch|click)\\b") != nil { return false }
         if editTextCommand(t) != nil { return true }
         return t.firstMatch("\\b(line breaks?|new lines?|bullet points?|bullets|numbered list|a list|paragraphs?|grammar|punctuation|spelling|capitali[sz]e|indent|reformat|rewrite|rephrase|formatting)\\b") != nil
             && t.firstMatch("\\b(window|tab|screen|page|website|app)\\b") == nil
@@ -122,6 +123,8 @@ public enum FastPathParser {
     }
 
     static func parseSingle(_ text: String, _ t: String, context: Context) -> ParsedCommand? {
+        if let c = textQueryCommand(t) { return c }
+        if let c = appQualifiedTab(t) { return c }
         if let c = noteCommand(text, t) { return c }
         if let c = typeCommand(text, t) { return c }
         if let c = messaging(text, t) { return c }
@@ -378,6 +381,90 @@ public enum FastPathParser {
         return nil
     }
 
+    // MARK: Tabs in a named app
+
+    /// App words accepted in "<app> tab 2" (in the other forms any app name is accepted and resolved at run time).
+    static let tabAppWords: Set<String> = ["chrome", "google chrome", "safari", "arc", "brave", "edge", "firefox", "vs code", "vscode", "code",
+                                           "visual studio", "visual studio code", "cursor", "finder", "terminal", "iterm", "xcode", "the browser", "browser"]
+    static let notAnApp: Set<String> = ["this", "this one", "this tab", "the current one", "the current tab", "it", "here", "the page", "this page",
+                                        "this window", "the window", "the right", "the left", "the browser tab"]
+
+    /// A tab command on its own ("switch to the second tab", "close the other tabs").
+    static func tabCommand(_ s: String) -> Action? {
+        guard let parsed = tabs(s) else { return nil }
+        guard parsed.actions.count == 1, let a = parsed.actions.first else { return nil }
+        switch a {
+        case .switchTab, .closeTab, .closeTabs, .newTab: return a
+        case .switchTo(let title) where s.hasSuffix(" tab") || s.hasSuffix(" tap"): return .switchTab(.title(title))
+        default: return nil
+        }
+    }
+
+    /// "switch to the second tab in VS Code", "inside VS Code switch to the second tab", "Chrome tab 2".
+    static func appQualifiedTab(_ t: String) -> ParsedCommand? {
+        if tabCommand(t) != nil { return nil }   // plain tab command: the front app decides
+        if let m = t.firstMatch("^(.+?)\\s+(?:in|inside|on|within|for)\\s+(?:the\\s+)?(.+?)(?:\\s+(?:app|application|window))?$"),
+           let inner = tabCommand(m[1]), !notAnApp.contains(m[2]), m[2].split(separator: " ").count <= 4 {
+            return ParsedCommand(.inApp(m[2], inner))
+        }
+        if let m = t.firstMatch("^(?:in|inside|on|within)\\s+(?:the\\s+)?(.+)$") {
+            let words = m[1].split(separator: " ").map(String.init)
+            for k in 1...min(4, max(1, words.count - 1)) where k < words.count {
+                let app = words[..<k].joined(separator: " ")
+                let rest = words[k...].joined(separator: " ").replacingOccurrences(of: "^(?:app|application)\\s+", with: "", options: .regularExpression)
+                if !notAnApp.contains(app), let inner = tabCommand(rest) { return ParsedCommand(.inApp(app, inner)) }
+            }
+        }
+        if let m = t.firstMatch("^(?:go\\s+to\\s+|switch\\s+to\\s+|open\\s+)?(.+?)\\s+(?:tab|tap)\\s+(?:number\\s+)?(\\S+)$"), tabAppWords.contains(m[1]),
+           let n = Numbers.parseLenient(m[2]) {
+            return ParsedCommand(.inApp(m[1], .switchTab(.index(n))))
+        }
+        return nil
+    }
+
+    // MARK: Copy / select / read a piece of text
+
+    static func ordinal(_ w: String) -> Int? {
+        if ["last", "final", "bottom"].contains(w) { return -1 }
+        return Numbers.parse(w)
+    }
+
+    /// "copy the first paragraph", "copy the paragraph about …", "select the paragraph that starts with …",
+    /// "copy the title", "read the second sentence", "copy the last message". Never a text edit.
+    static func textQueryCommand(_ t: String) -> ParsedCommand? {
+        guard let vm = t.firstMatch("^(copy|select|highlight|grab|read)\\s+(.+)$") else { return nil }
+        let verb = vm[1]
+        var rest = vm[2].replacingOccurrences(of: "^(?:me|out)\\s+", with: "", options: .regularExpression)
+        rest = rest.replacingOccurrences(of: "\\s+(?:to the clipboard|for me|please|out loud|aloud)$", with: "", options: .regularExpression)
+        func make(_ q: TextQuery) -> ParsedCommand {
+            switch verb {
+            case "read": return ParsedCommand(.readText(q))
+            case "select", "highlight": return ParsedCommand(.selectText(q))
+            default: return ParsedCommand(.copyText(q))
+            }
+        }
+        let place = "(?:\\s+(?:of|on|in|from)\\s+(?:the|this)\\s+(?:page|article|text|note|document|chat|conversation|site|website))?"
+        if rest.firstMatch("^(?:the\\s+)?(?:page\\s+|article\\s+|main\\s+)?(?:title|heading|headline)" + place + "$") != nil { return make(.title) }
+        if let m = rest.firstMatch("^(?:the\\s+)?(\\S+)\\s+(paragraph|para|sentence|line|message)" + place + "$"), let n = ordinal(m[1]) {
+            switch m[2] {
+            case "sentence", "line": return make(.sentence(n))
+            case "message": return make(n == -1 ? .lastMessage(1) : .paragraph(n))
+            default: return make(.paragraph(n))
+            }
+        }
+        let noun = "(?:paragraph|para|part|section|bit|passage|text)"
+        if let m = rest.firstMatch("^(?:the\\s+)?" + noun + "\\s+(?:that\\s+|which\\s+)?(?:starts|starting|begins|beginning)\\s+with\\s+(.+)$") {
+            return make(.paragraphStarting(m[1]))
+        }
+        if let m = rest.firstMatch("^(?:the\\s+)?" + noun + "\\s+(?:that talks about|talking about|where it talks about|which talks about|that mentions|mentioning|that discusses|discussing|that describes|describing|about|on|regarding|with)\\s+(.+)$") {
+            return make(.paragraphAbout(m[1]))
+        }
+        if rest.firstMatch("^(?:this|that|the current|the visible|the)\\s+(?:paragraph|para)$") != nil { return make(.visibleParagraph) }
+        // "copy the paragraph Obrash" (the recognizer lost "about")
+        if verb != "read", let m = rest.firstMatch("^(?:the\\s+)?(?:paragraph|para)\\s+(.+)$") { return make(.paragraphAbout(m[1])) }
+        return nil
+    }
+
     /// "note buy milk", "take a note: call the bank", "note that the meeting moved".
     static func noteCommand(_ raw: String, _ t: String) -> ParsedCommand? {
         let pattern = "^\\s*(?:please\\s+)?(?:take a note|make a note|add a note|new note saying|note down|jot down|write down a note|save a note|note)(?:\\s+that)?[\\s:,.-]+(.+)$"
@@ -434,8 +521,9 @@ public enum FastPathParser {
         let verb = "(?:make|format|turn|convert|change|rewrite|re write|reformat|restructure|separate|split|put|fix|correct|clean up|tidy up|tidy|capitalize|uppercase|lowercase|shorten|expand|translate|number|bullet|add|insert|remove|indent|join|merge|sort|reorder|organize|organise|break|space out|polish|improve|summarize|rephrase)"
         let object = "(?:that|it|this|the text|the points|the list|the items|the lines|the paragraphs?|the sentences?|each point|each item|each line|everything|the note|the message|line breaks?|new lines?|blank lines?|empty lines?|bullet points?|bullets|a list|numbered list|paragraphs?|grammar|punctuation|spelling|formal|casual|shorter|longer|title case|uppercase|lowercase|commas?|dashes|points|items|lines)"
         guard t.firstMatch("^\(verb)\\b") != nil, t.firstMatch("\\b\(object)\\b") != nil else { return nil }
-        // "add a note …", "insert my email", "open …" are other commands.
+        // "add a note …", "insert my email", "open …" are other commands; copying, selecting and reading never edit.
         if t.hasPrefix("add a note") || t.hasPrefix("insert my") || t.hasPrefix("put the cursor") { return nil }
+        if t.firstMatch("^(copy|select|highlight|grab|read|find|search|open|show)\\b") != nil { return nil }
         return ParsedCommand(.editText(t), label: "Editing the text")
     }
 

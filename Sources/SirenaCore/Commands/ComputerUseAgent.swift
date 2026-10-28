@@ -46,6 +46,7 @@ public final class ComputerUseAgent {
         var typedSinceLastCheck = false
         var lastTyped: String?
         for step in 1...maxSteps {
+            try Task.checkCancellation()
             let body: JSON = .object([
                 "model": .string(modelName()),
                 "input": .array(input),
@@ -78,6 +79,7 @@ public final class ComputerUseAgent {
                 acknowledged = checks
             }
             for action in actions {
+                try Task.checkCancellation()
                 let type = action["type"]?.stringValue ?? ""
                 onStatus?("Step \(step): \(type)")
                 if type == "keypress", typedSinceLastCheck, let keys = action["keys"]?.arrayValue?.compactMap({ $0.stringValue }),
@@ -88,10 +90,11 @@ public final class ComputerUseAgent {
                     if !ok { return "Cancelled before pressing Enter" }
                     typedSinceLastCheck = false
                 }
-                if type == "click", let label = ComputerUseAgent.elementLabel(at: ComputerUseAgent.point(action, shot: shot)), Action.irreversibleLabel(label.label) {
-                    let question = "Click “\(label.label)”" + (label.app.map { " in \($0)" } ?? "") + "?"
+                if type == "click", case let target = ScreenItem.describe(at: ComputerUseAgent.point(action, shot: shot)),
+                   let label = target.label, Action.irreversibleLabel(label) {
+                    let question = "Click \(target.phrase) in \(target.place)?"
                     let ok = await confirm?(question, nil) ?? false
-                    if !ok { return "Cancelled before clicking “\(label.label)”" }
+                    if !ok { return "Cancelled before clicking “\(label)”" }
                 }
                 try perform(action, shot: shot)
                 if type == "type" { typedSinceLastCheck = true; lastTyped = action["text"]?.stringValue }
@@ -139,12 +142,9 @@ public final class ComputerUseAgent {
             switch a["type"]?.stringValue ?? "" {
             case "click", "double_click", "triple_click":
                 let p = point(a, shot: shot)
-                if let hit = elementLabel(at: p) {
-                    app = app ?? hit.app
-                    parts.append("\(a["type"]?.stringValue == "click" ? "click" : "double-click") “\(hit.label)”")
-                } else {
-                    parts.append("click at \(Int(p.x)), \(Int(p.y))")
-                }
+                let target = ScreenItem.describe(at: p)
+                app = app ?? target.place
+                parts.append("\(a["type"]?.stringValue == "click" ? "click" : "double-click") \(target.phrase)")
             case "type": parts.append("type “\(ConfirmationText.short(a["text"]?.stringValue ?? ""))”")
             case "keypress", "key":
                 let keys = a["keys"]?.arrayValue?.compactMap { $0.stringValue } ?? []
@@ -238,5 +238,118 @@ public final class ComputerUseAgent {
         let rep = NSBitmapImageRep(cgImage: image)
         guard let png = rep.representation(using: .png, properties: [:]) else { throw ExecutionError.failed("PNG encoding failed") }
         return Shot(png: png, pixelSize: CGSize(width: image.width, height: image.height), pointSize: pointSize)
+    }
+}
+
+
+/// Names what is under a screen point for confirmation questions: the item itself ("“Mark”, the first item in the
+/// “Lista de conversas” list"), never the window or page title ("(73) WhatsApp"); when no name exists, its role
+/// and position ("the button near the top right of the WhatsApp window").
+public enum ScreenItem {
+    public struct Description {
+        /// The item's own label, when it has one.
+        public var label: String?
+        /// "“Send” button", "“Mark” (the first item in the “Chats” list)", "the item near the top left".
+        public var phrase: String
+        /// Where: the web app / page ("WhatsApp") in a browser, else the app name.
+        public var place: String
+    }
+
+    static let containerRoles: Set<String> = ["AXWebArea", "AXWindow", "AXApplication", "AXScrollArea", "AXSplitGroup", "AXLayoutArea",
+                                              "AXBrowser", "AXSheet", "AXDrawer"]
+    static let collectionRoles: Set<String> = ["AXList", "AXTable", "AXOutline", "AXGrid", "AXTabGroup"]
+
+    static func noun(_ role: String, subrole: String?) -> String {
+        switch role {
+        case "AXButton", "AXPopUpButton", "AXMenuButton": return "button"
+        case "AXLink": return "link"
+        case "AXTextField", "AXTextArea", "AXSearchField", "AXComboBox": return "text field"
+        case "AXCheckBox": return subrole == "AXSwitch" ? "switch" : "checkbox"
+        case "AXRadioButton": return subrole == "AXTabButton" ? "tab" : "option"
+        case "AXTab": return "tab"
+        case "AXMenuItem", "AXMenuBarItem": return "menu item"
+        case "AXRow", "AXCell", "AXListItem": return "row"
+        case "AXImage": return "image"
+        default: return "item"
+        }
+    }
+
+    static func ordinal(_ n: Int) -> String {
+        let words = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"]
+        return (1...10).contains(n) ? words[n - 1] : "\(n)th"
+    }
+
+    public static func describe(at p: CGPoint) -> Description {
+        var ref: AXUIElement?
+        let hitOK = AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(p.x), Float(p.y), &ref) == .success
+        return describe(hit: hitOK ? ref.map(AXElement.init) : nil, point: p)
+    }
+
+    /// Same, for an element already found (the element under the point).
+    public static func describe(hit: AXElement?, point p: CGPoint) -> Description {
+        // Ancestors up to the window.
+        var chain: [AXElement] = []
+        var cur = hit
+        while let c = cur, chain.count < 25 {
+            chain.append(c)
+            if c.role == "AXWindow" { break }
+            cur = c.parent
+        }
+        let window = chain.last { $0.role == "AXWindow" }
+        let pid = hit?.pid ?? 0
+        let appName = NSRunningApplication(processIdentifier: pid)?.localizedName ?? RunningApps.frontmost()?.name ?? "the app"
+        let windowTitle = window?.title ?? ""
+        let pageTitle = AppTabs.cleanTitle(windowTitle)
+        let isBrowser = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier.map(BrowserControl.isBrowser) ?? false
+        let place = isBrowser && !pageTitle.isEmpty ? pageTitle : appName
+        // Labels that name the window or page are never the item.
+        let forbidden = Set([windowTitle, pageTitle, appName, place].map { WakeWord.normalize($0) }.filter { !$0.isEmpty })
+        func usable(_ s: String) -> String? {
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            guard (1...60).contains(t.count) else { return nil }
+            let n = WakeWord.normalize(t)
+            if n.isEmpty || forbidden.contains(n) || forbidden.contains(where: { !$0.isEmpty && n.contains($0) && $0.count >= 6 }) { return nil }
+            return t
+        }
+        // The item: the closest element (hit upwards, stopping at containers) with a usable label.
+        var label: String?
+        var labeled: AXElement?
+        for el in chain {
+            if containerRoles.contains(el.role ?? "") || collectionRoles.contains(el.role ?? "") { break }
+            if let l = usable(el.label) { label = l; labeled = el; break }
+        }
+        let itemRole = labeled?.role ?? hit?.role ?? ""
+        let itemNoun = noun(itemRole, subrole: labeled?.subrole ?? hit?.subrole)
+        // Collection context: "the first item in the “Chats” list".
+        var context: String?
+        if let ci = chain.firstIndex(where: { collectionRoles.contains($0.role ?? "") }), ci > 0 {
+            let collection = chain[ci], row = chain[ci - 1]
+            let siblings = collection.children.sorted { ($0.frame?.minY ?? 0, $0.frame?.minX ?? 0) < ($1.frame?.minY ?? 0, $1.frame?.minX ?? 0) }
+            let listName = usable(collection.label).map { " “\($0)”" } ?? ""
+            let kind = collection.role == "AXTabGroup" ? "tab bar" : (collection.role == "AXTable" || collection.role == "AXOutline" ? "list" : "list")
+            if let i = siblings.firstIndex(of: row) {
+                context = "the \(ordinal(i + 1)) item in the\(listName) \(kind)"
+            } else if !listName.isEmpty {
+                context = "in the\(listName) \(kind)"
+            }
+        }
+        let phrase: String
+        if let l = label {
+            let kind = itemNoun == "item" || itemNoun == "row" ? "" : " \(itemNoun)"
+            phrase = "“\(l)”\(kind)" + (context.map { " (\($0))" } ?? "")
+        } else if let c = context, c.hasPrefix("the ") {
+            phrase = c
+        } else {
+            // Position inside the window.
+            var region = "middle"
+            if let f = window?.frame, f.width > 0, f.height > 0 {
+                let rx = (p.x - f.minX) / f.width, ry = (p.y - f.minY) / f.height
+                let v = ry < 0.33 ? "top" : (ry > 0.66 ? "bottom" : "middle")
+                let h = rx < 0.33 ? "left" : (rx > 0.66 ? "right" : "center")
+                region = v == "middle" && h == "center" ? "middle" : (v == "middle" ? h : (h == "center" ? v : "\(v) \(h)"))
+            }
+            phrase = "the \(itemNoun) near the \(region) of the window"
+        }
+        return Description(label: label, phrase: phrase, place: place)
     }
 }

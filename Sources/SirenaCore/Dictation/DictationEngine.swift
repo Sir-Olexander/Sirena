@@ -21,6 +21,8 @@ public final class DictationEngine {
     /// Text inserted in the current session (kept after "stop" until a new session or another app).
     public private(set) var sessionText = ""
     public private(set) var sessionAppPid: pid_t = 0
+    /// When text was last inserted in this session.
+    public var sessionUpdatedAt: Date { lastInsertAt }
     private var chunks: [String] = []
     private var listCounter = 0
 

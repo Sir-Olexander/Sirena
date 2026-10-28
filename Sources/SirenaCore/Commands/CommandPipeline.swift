@@ -25,6 +25,10 @@ public final class CommandPipeline {
     private var pendingInfo: (command: String, layer: String, shortcutId: String?)?
     private var pendingContinuation: CheckedContinuation<Bool, Never>?
     public private(set) var isBusy = false
+    /// The screenshot fallback is working: only "cancel", "stop" or a confirmation answer may interrupt it.
+    public private(set) var isScreenAgentRunning = false
+    static let stopWords: Set<String> = ["cancel", "stop", "stop it", "abort", "never mind", "nevermind", "cancel that", "stop that",
+                                         "cancel it", "stop looking", "stop the agent", "cancel the agent"]
     private var currentTask: Task<Void, Never>?
     /// The last saved shortcut that ran, for "Sirena, forget that".
     public private(set) var lastShortcutRun: (id: UUID, at: Date)?
@@ -51,6 +55,16 @@ public final class CommandPipeline {
     public func handle(command: String, asrMs: Int?) {
         let text = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        if isScreenAgentRunning {
+            if CommandPipeline.stopWords.contains(FastPathParser.normalize(text)) {
+                cancelPending(silently: true)
+                overlay.showWorking("Stopped looking at the screen", autoClear: 2)
+            } else {
+                overlay.showHint("Still looking at the screen — say “cancel” to stop it", autoClear: 3)
+                history.append(HistoryEntry(utterance: text, route: "ignored (screen agent busy)", latency: LatencyReport(asrMs: asrMs)))
+            }
+            return
+        }
         if pending != nil || pendingContinuation != nil { cancelPending(silently: true) }
         currentTask?.cancel()
         currentTask = Task { await self.process(text, asrMs: asrMs) }
@@ -336,12 +350,26 @@ public final class CommandPipeline {
             log(text, layer: "screen", actions: [.computerUse(goal: goal)], result: summary, latency: latency)
         } catch {
             latency.actMs = Int(Date().timeIntervalSince(t) * 1000)
+            if CommandPipeline.isCancellation(error) {
+                overlay.showWorking("Stopped looking at the screen", autoClear: 2)
+                log(text, layer: "screen", actions: [.computerUse(goal: goal)], result: "Stopped by voice", latency: latency)
+                return
+            }
             overlay.showError(error.localizedDescription)
             log(text, layer: "screen", actions: [.computerUse(goal: goal)], result: "error: \(error.localizedDescription)", latency: latency, failed: true)
         }
     }
 
+    static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let u = error as? URLError, u.code == .cancelled { return true }
+        if case APIError.transport(let s) = error, s.lowercased().contains("cancel") { return true }
+        return (error as NSError).domain == "Swift.CancellationError"
+    }
+
     private func runComputerUse(goal: String, command: String) async throws -> String {
+        isScreenAgentRunning = true
+        defer { isScreenAgentRunning = false }
         overlay.showWorking("Looking at the screen…", autoClear: 60)
         SessionStats.shared.beginScreenRead(command: command)
         let snapshot = context.snapshot(includeElements: false)

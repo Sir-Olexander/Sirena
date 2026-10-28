@@ -22,6 +22,11 @@ public final class DictationEditor {
     }
 
     public func edit(instruction: String) async throws -> String {
+        // Copying, selecting, reading, opening… are never text edits.
+        let t = FastPathParser.normalize(instruction)
+        if FastPathParser.textQueryCommand(t) != nil || t.firstMatch("^(copy|select|highlight|grab|read|find|search|open|show|go|switch|click|scroll)\\b") != nil {
+            throw ExecutionError.failed("That isn't a text edit")
+        }
         guard let client = clientProvider() else { throw APIError.missingKey }
         let target = try findTarget()
         let original: String
@@ -38,22 +43,35 @@ public final class DictationEditor {
 
     // MARK: Finding the text
 
+    /// An element the user can type into (text fields, text views, contenteditable web content).
+    static func isEditable(_ el: AXElement) -> Bool {
+        if el.bool("AXEditable") == true { return true }
+        guard ["AXTextArea", "AXTextField", "AXComboBox", "AXSearchField"].contains(el.role ?? "") else { return false }
+        var settable = DarwinBoolean(false)
+        return AXUIElementIsAttributeSettable(el.ref, kAXValueAttribute as CFString, &settable) == .success && settable.boolValue
+    }
+
+    /// Only text the user dictated, selected in an editable field, or that is in the focused editable field.
+    /// Anything else (a web page, a list, a read-only view) is left alone.
     private func findTarget() throws -> Target {
         let session = dictation.sessionText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let sessionHere = !session.isEmpty && (dictation.sessionAppPid == 0 || dictation.sessionAppPid == RunningApps.frontmost()?.pid)
-        if let el = AX.focusedTextElement(), let value = el.valueString {
-            let ns = value as NSString
-            if sessionHere {
-                let exact = ns.range(of: session, options: .backwards)
-                if exact.location != NSNotFound { return .range(el, exact, session) }
-                if let r = DictationEditor.looseRange(of: session, in: value) { return .range(el, r, ns.substring(with: r)) }
-            }
-            if let sel = selectedRange(el), sel.length > 0 { return .range(el, sel, ns.substring(with: sel)) }
-            if ns.length > 0, ns.length <= 6000 { return .range(el, NSRange(location: 0, length: ns.length), value) }
+        let sessionHere = !session.isEmpty && dictation.sessionAppPid == RunningApps.frontmost()?.pid
+            && Date().timeIntervalSince(dictation.sessionUpdatedAt) < 30 * 60
+        guard let el = AXElement.systemWide.focusedElement, DictationEditor.isEditable(el) else {
+            throw ExecutionError.failed("Nothing to edit — dictate, or select text in a text field, first")
         }
-        if sessionHere { return .tail(dictation.sessionText, selected: false) }
-        if let selected = TextExtractor.selectedText() { return .tail(selected, selected: true) }
-        throw ExecutionError.failed("Select the text to edit first")
+        let value = el.valueString ?? ""
+        let ns = value as NSString
+        if sessionHere, !value.isEmpty {
+            let exact = ns.range(of: session, options: .backwards)
+            if exact.location != NSNotFound { return .range(el, exact, session) }
+            if let r = DictationEditor.looseRange(of: session, in: value) { return .range(el, r, ns.substring(with: r)) }
+        }
+        if let sel = selectedRange(el), sel.length > 0, sel.location + sel.length <= ns.length { return .range(el, sel, ns.substring(with: sel)) }
+        if ns.length > 0, ns.length <= 6000 { return .range(el, NSRange(location: 0, length: ns.length), value) }
+        // The field's text cannot be read, but Sirena just typed into it: select that text backwards from the caret.
+        if sessionHere, value.isEmpty { return .tail(dictation.sessionText, selected: false) }
+        throw ExecutionError.failed(ns.length == 0 ? "The text field is empty" : "The text is too long to edit — select the part to change")
     }
 
     private func selectedRange(_ el: AXElement) -> NSRange? {

@@ -14,6 +14,45 @@ public enum SelfTests {
         case "mics": return mics()
         case "fallback": return await fallback()
         case "tabs": return await tabsTest()
+        case "finder-tabs": return await finderTabsTest()
+        case "tabdump": return tabDump()
+        case "finder-cleanup":
+            // Closes only the windows the earlier Finder tests left behind (home folder "nadiya" and new "Recentes" tabs):
+            // bring each one to the front and press ⌘W (Finder's scripting "close" ignores tabbed windows).
+            guard let finder = RunningApps.list().first(where: { $0.bundleId == "com.apple.finder" }) else { return "no Finder" }
+            var closed = 0
+            for _ in 0..<12 {
+                guard let id = BrowserControl.run("""
+                    tell application "Finder"
+                        set ws to (every Finder window whose name is "Recentes" or name is "nadiya")
+                        if (count of ws) = 0 then return ""
+                        set w to item 1 of ws
+                        set index of w to 1
+                        return (id of w) as text
+                    end tell
+                    """, timeout: 5), !id.isEmpty else { break }
+                RunningApps.activate(finder)
+                usleep(350_000)
+                let front = BrowserControl.run("tell application \"Finder\" to return (id of front Finder window) as text", timeout: 5)
+                guard front == id else { break }   // never close a window that is not the leftover
+                Keyboard.press(KeyCombo("w", [.command]))
+                usleep(400_000)
+                closed += 1
+            }
+            return "closed \(closed); left: " + (BrowserControl.run("tell application \"Finder\" to return (name of every Finder window) as text", timeout: 5) ?? "?")
+        case "finderwins":
+            let count = BrowserControl.run("tell application \"Finder\" to return (count of Finder windows) as text", timeout: 5) ?? "?"
+            let names = BrowserControl.run("tell application \"Finder\" to return (name of every Finder window) as text", timeout: 5) ?? "?"
+            let ids = BrowserControl.run("tell application \"Finder\" to return (id of every Finder window) as text", timeout: 5) ?? "?"
+            return "count: \(count)\nnames: \(names)\nids: \(ids)"
+        case "pagetext": return await pageTextTest()
+        case "webtext": return await WebTextTest.run()
+        case "chromewins":
+            guard let chrome = RunningApps.list().first(where: { $0.bundleId == "com.google.Chrome" }) else { return "no Chrome" }
+            let ax = AXElement.application(pid: chrome.pid)
+            let axList = ax.windows.map { $0.title ?? "-" }.joined(separator: " | ")
+            let script = "tell application \"Google Chrome\"\nset out to \"\"\nrepeat with w in every window\nset out to out & (id of w as text) & \" : \" & (title of active tab of w) & \" | \"\nend repeat\nreturn out\nend tell"
+            return "AX front: \(AX.frontWindow(pid: chrome.pid)?.title ?? "nil")\nAX windows: \(axList)\nscript: \(BrowserControl.run(script, timeout: 5) ?? "nil")"
         case "reopen":
             guard let chrome = RunningApps.list().first(where: { $0.bundleId == "com.google.Chrome" }) else { return "Chrome is not running" }
             let before = AXElement.application(pid: chrome.pid).windows.map { $0.title ?? "?" }
@@ -107,6 +146,197 @@ public enum SelfTests {
         _ = script("tell application \"Google Chrome\" to close window id \(wid)")
         lines.append("test window closed; Chrome windows now: \(ax.windows.count)")
         return lines.joined(separator: "\n")
+    }
+
+    /// Accessibility details of tab groups (to tell window tab bars from ribbons).
+    static func tabDump() -> String {
+        var lines: [String] = []
+        let wid = BrowserControl.run("tell application \"Finder\"\nset w to make new Finder window to (path to home folder)\nreturn (id of w) as text\nend tell", timeout: 5)
+        if let finder = RunningApps.list().first(where: { $0.bundleId == "com.apple.finder" }) { RunningApps.activate(finder); usleep(400_000); Keyboard.press(KeyCombo("t", [.command])); usleep(600_000) }
+        for app in RunningApps.list() where ["com.apple.finder", "com.microsoft.Word", "com.apple.Terminal"].contains(app.bundleId) {
+            guard let win = AX.frontWindow(pid: app.pid) else { continue }
+            var queue: [(AXElement, Int)] = [(win, 0)]
+            var head = 0
+            while head < queue.count, head < 600 {
+                let (el, d) = queue[head]; head += 1
+                if el.role == "AXTabGroup" {
+                    let f = el.frame ?? .zero
+                    lines.append("\(app.name): group sub=\(el.subrole ?? "-") desc=\(el.roleDescription ?? "-") id=\(el.identifier ?? "-") title=\(el.title ?? "-") frame=\(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))x\(Int(f.height)) win=\(Int(win.frame?.width ?? 0))")
+                    for t in el.children.prefix(4) {
+                        let tf = t.frame ?? .zero
+                        lines.append("    child \(t.role ?? "-") sub=\(t.subrole ?? "-") desc=\(t.roleDescription ?? "-") id=\(t.identifier ?? "-") w=\(Int(tf.width)) label=\(t.label.prefix(20)) kids=\(t.children.map { "\($0.role ?? "")/\($0.subrole ?? "")/\($0.label.prefix(12))" })")
+                    }
+                }
+                if d < 5 { queue += el.children.map { ($0, d + 1) } }
+            }
+        }
+        if let wid { _ = BrowserControl.run("tell application \"Finder\" to close (every Finder window whose id is \(wid))", timeout: 5) }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Closes every Finder window (tab) that was not open before a test. Finder scripting treats each tab as a window.
+    static func finderWindowIDs() -> Set<String> {
+        Set((BrowserControl.run("""
+            tell application "Finder"
+                set out to ""
+                repeat with w in every Finder window
+                    set out to out & (id of w as text) & ","
+                end repeat
+                return out
+            end tell
+            """, timeout: 5) ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
+    }
+
+    /// Closes every Finder window (tab) that was not open before a test: bring it to the front and press ⌘W
+    /// (Finder's scripting "close" ignores tabbed windows). A window is closed only after confirming it is in front.
+    static func closeFinderWindows(except before: Set<String>) {
+        guard let finder = RunningApps.list().first(where: { $0.bundleId == "com.apple.finder" }) else { return }
+        for id in finderWindowIDs().subtracting(before) {
+            _ = BrowserControl.run("""
+                tell application "Finder"
+                    set w to item 1 of (every Finder window whose id is \(id))
+                    set index of w to 1
+                end tell
+                """, timeout: 5)
+            RunningApps.activate(finder)
+            usleep(350_000)
+            guard BrowserControl.run("tell application \"Finder\" to return (id of front Finder window) as text", timeout: 5) == id else { continue }
+            Keyboard.press(KeyCombo("w", [.command]))
+            usleep(400_000)
+        }
+    }
+
+    static func appKinds() -> String {
+        RunningApps.list().map { app -> String in
+            let kind = AppTabs.kind(of: app).map { "\($0)" } ?? "no tabs → browser"
+            let native = AppTabs.readNative(pid: app.pid).map { " (\($0.tabs.count) tabs, active \($0.active))" } ?? ""
+            return "\(app.name): \(kind)\(native)"
+        }.joined(separator: "\n")
+    }
+
+    /// Finder: a temporary window with 3 tabs; tab commands must act on Finder, not the browser.
+    static func finderTabsTest() async -> String {
+        var lines = ["--- tab kind of each running app", appKinds(), "--- Finder test window"]
+        // Separator-joined ids ("(id of every Finder window) as text" glues them together).
+        let before = finderWindowIDs()
+        guard !before.isEmpty || BrowserControl.run("tell application \"Finder\" to return (count of Finder windows) as text", timeout: 5) == "0" else {
+            return (lines + ["could not read the open Finder windows; test skipped so nothing of yours is touched"]).joined(separator: "\n")
+        }
+        guard let wid = BrowserControl.run("""
+            tell application "Finder"
+                set w to make new Finder window to (path to home folder)
+                return (id of w) as text
+            end tell
+            """, timeout: 5), let finder = RunningApps.list().first(where: { $0.bundleId == "com.apple.finder" }) else {
+            return (lines + ["could not open a Finder window"]).joined(separator: "\n")
+        }
+        RunningApps.activate(finder)
+        usleep(500_000)
+        Keyboard.press(KeyCombo("t", [.command])); usleep(500_000)
+        Keyboard.press(KeyCombo("t", [.command])); usleep(700_000)
+        let executor = ActionExecutor(context: ScreenContext(), numbers: NumbersMode(), inserter: .shared)
+        func state() -> String { AppTabs.readNative(pid: finder.pid).map { "\($0.tabs.count) tabs, active \($0.active)" } ?? "no tab bar" }
+        lines.append("after ⌘T ⌘T: \(state())")
+        for (name, action) in [("switch to the first tab", Action.switchTab(.first)), ("next tab", .switchTab(.next)), ("switch to the third tab", .switchTab(.index(3))),
+                               ("previous tab", .switchTab(.previous)), ("close the other tabs", .closeTabs(.others))] as [(String, Action)] {
+            let r = try? await executor.execute([action], snapshot: nil)
+            usleep(300_000)
+            lines.append("\(name) → \(r?.summary ?? "error"); now \(state()); front app: \(RunningApps.frontmost()?.name ?? "?")")
+        }
+        _ = wid
+        closeFinderWindows(except: before)
+        lines.append("test windows closed")
+        return lines.joined(separator: "\n")
+    }
+
+    /// Chrome: a temporary tab with a Wikipedia article in the Chrome window on the current desktop; copy / select
+    /// queries. Closes the tab and restores the previously active tab and the clipboard. Never clicks.
+    static func pageTextTest() async -> String {
+        guard let chrome = RunningApps.list().first(where: { $0.bundleId == "com.google.Chrome" }) else { return "Chrome is not running" }
+        let savedClipboard = NSPasteboard.general.string(forType: .string)
+        AX.enableEnhancedAccessibility(pid: chrome.pid)
+        guard let tab = openTestTab(pid: chrome.pid) else { return "could not open a test tab" }
+        var ready = false
+        for _ in 0..<24 {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if pageReady(pid: chrome.pid) { ready = true; break }
+        }
+        var lines = ["test tab ready: \(ready)"]
+        if ready { lines += pageTextChecks(pid: chrome.pid) }
+        closeTestTab(tab)
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        if let saved = savedClipboard { pb.setString(saved, forType: .string) }
+        lines.append("test tab closed, previous tab and clipboard restored")
+        return lines.joined(separator: "\n")
+    }
+
+    struct TestTab { let window: String; let tab: String; let previous: String }
+
+    static func openTestTab(pid: pid_t) -> TestTab? {
+        guard let axTitle = AX.frontWindow(pid: pid)?.title else { return nil }
+        let tabTitle = AppTabs.cleanTitle(axTitle).replacingOccurrences(of: "\"", with: "")
+        let script = "tell application \"Google Chrome\"\n"
+            + "repeat with w in every window\n"
+            + "if title of active tab of w starts with \"" + tabTitle + "\" then\n"
+            + "set prev to active tab index of w\n"
+            + "set t to make new tab at end of tabs of w with properties {URL:\"https://en.wikipedia.org/wiki/Arthur_Morgan_(Red_Dead)\"}\n"
+            + "return ((id of w) as text) & \",\" & ((id of t) as text) & \",\" & (prev as text)\n"
+            + "end if\nend repeat\nreturn \"\"\nend tell"
+        guard let ids = BrowserControl.run(script, timeout: 5) else { return nil }
+        let parts = ids.split(separator: ",").map(String.init)
+        guard parts.count == 3 else { return nil }
+        return TestTab(window: parts[0], tab: parts[1], previous: parts[2])
+    }
+
+    static func closeTestTab(_ t: TestTab) {
+        let script = "tell application \"Google Chrome\"\nset w to window id " + t.window + "\n"
+            + "close (every tab of w whose id is " + t.tab + ")\nset active tab index of w to " + t.previous + "\nend tell"
+        _ = BrowserControl.run(script, timeout: 5)
+    }
+
+    static func pageReady(pid: pid_t) -> Bool {
+        let title = AX.frontWindow(pid: pid)?.title ?? ""
+        guard title.contains("Arthur Morgan") else { return false }
+        return PageText.blocks(pid: pid).filter { $0.isProse }.count >= 3
+    }
+
+    static func pageTextChecks(pid: pid_t) -> [String] {
+        var lines: [String] = []
+        let blocks = PageText.blocks(pid: pid)
+        lines.append("blocks: \(blocks.count), prose: \(blocks.filter { $0.isProse }.count)")
+        var queries: [TextQuery] = []
+        queries.append(.title)
+        queries.append(.paragraph(1))
+        queries.append(.paragraph(2))
+        queries.append(.paragraphAbout("reception"))
+        queries.append(.paragraphAbout("early life"))
+        queries.append(.paragraphStarting("Arthur Morgan is"))
+        queries.append(.sentence(2))
+        queries.append(.paragraph(-1))
+        for q in queries {
+            let found = PageText.resolve(q, pid: pid).map { String($0.text.prefix(100)) } ?? "NOT FOUND"
+            lines.append(q.spoken + " → " + found)
+        }
+        if let r = PageText.resolve(.paragraph(1), pid: pid), let el = r.block?.element {
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(r.text, forType: .string)
+            lines.append("clipboard now starts: " + String((pb.string(forType: .string) ?? "").prefix(60)))
+            lines.append(selectionCheck(el, name: "first paragraph"))
+        }
+        if let r = PageText.resolve(.paragraphAbout("reception"), pid: pid), let el = r.block?.element {
+            lines.append(selectionCheck(el, name: "paragraph about reception"))
+        }
+        return lines
+    }
+
+    static func selectionCheck(_ el: AXElement, name: String) -> String {
+        let ok = PageText.selectWithTextMarkers(el)
+        var web: AXElement? = el
+        while let w = web, w.role != "AXWebArea" { web = w.parent }
+        let selected = String((web?.string("AXSelectedText") ?? "").prefix(70))
+        return "select the " + name + " via the browser: \(ok); selected text starts: " + selected
     }
 
     /// The capture class on the default input: does the silence watchdog fire, and does the built-in mic deliver sound?

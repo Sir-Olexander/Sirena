@@ -89,6 +89,10 @@ public indirect enum Action: Equatable, Codable {
     case insertSnippet(String)
     case runAppleShortcut(String)
     case forgetLearnedShortcut
+    /// Bring an app forward, then run the inner action there ("Chrome tab 2", "in VS Code, switch to the second tab").
+    case inApp(String, Action)
+    /// Copy / select / read a piece of the text on screen ("copy the first paragraph").
+    case copyText(TextQuery), selectText(TextQuery), readText(TextQuery)
     case openNotesWindow, openShortcutsWindow, openHistoryWindow
 
     /// Control actions are handled by the listening controller, not the executor.
@@ -96,7 +100,7 @@ public indirect enum Action: Equatable, Codable {
         switch self {
         case .wait, .turnOff, .startDictation, .stopDictation, .showNumbers, .hideNumbers, .undo, .cancel, .newLine, .deleteLastChunk, .say,
              .readSelection, .readArticle, .readPage, .readingControl, .forgetLearnedShortcut,
-             .openNotesWindow, .openShortcutsWindow, .openHistoryWindow:
+             .openNotesWindow, .openShortcutsWindow, .openHistoryWindow, .readText:
             return true
         default:
             return false
@@ -190,6 +194,10 @@ public indirect enum Action: Equatable, Codable {
         case .openNotesWindow: return "Notes & snippets"
         case .openShortcutsWindow: return "Shortcut book"
         case .openHistoryWindow: return "Command history"
+        case .inApp(let app, let inner): return "\(inner.shortDescription) in \(app)"
+        case .copyText(let q): return "Copying \(q.spoken)"
+        case .selectText(let q): return "Selecting \(q.spoken)"
+        case .readText(let q): return "Reading \(q.spoken)"
         }
     }
 }

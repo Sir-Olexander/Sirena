@@ -11,12 +11,16 @@ public struct RouterContext: Equatable {
     public var pushToTalk: PushToTalkKey?
     /// Sirena is reading aloud: reading controls work without the name, everything else needs it.
     public var isReading: Bool
+    /// The screenshot fallback is working: only "cancel" / "stop" (and confirmation answers) get through.
+    public var screenAgentBusy: Bool
 
     public init(state: ListeningState, isDictating: Bool = false, hasPendingConfirmation: Bool = false,
-                inFollowUpWindow: Bool = false, numbersVisible: Bool = false, pushToTalk: PushToTalkKey? = nil, isReading: Bool = false) {
+                inFollowUpWindow: Bool = false, numbersVisible: Bool = false, pushToTalk: PushToTalkKey? = nil, isReading: Bool = false,
+                screenAgentBusy: Bool = false) {
         self.state = state; self.isDictating = isDictating; self.hasPendingConfirmation = hasPendingConfirmation
         self.inFollowUpWindow = inFollowUpWindow; self.numbersVisible = numbersVisible; self.pushToTalk = pushToTalk
         self.isReading = isReading
+        self.screenAgentBusy = screenAgentBusy
     }
 }
 
@@ -61,6 +65,12 @@ public enum UtteranceRouter {
             return .ignore("waiting")
         case .awake:
             break
+        }
+
+        if context.screenAgentBusy, !context.hasPendingConfirmation {
+            let candidate = WakeWord.stripLeadingName(text).map(WakeWord.normalize) ?? norm
+            if CommandPipeline.stopWords.contains(candidate) { return .command("cancel") }
+            return .ignore("screen agent busy")
         }
 
         if context.isReading {
