@@ -358,3 +358,42 @@ final class ScreenFallbackTests: XCTestCase {
         XCTAssertFalse(ComputerUseAgent.isHarmlessKeys(["CMD", "backspace"].map { $0.lowercased() }, typed: false))
     }
 }
+
+/// The only learning suggestion proposed "open first tab" → tab 2, reading two commands in a row as a correction.
+final class LearningTests: XCTestCase {
+    func entry(_ command: String, layer: String, actions: [Action], at t: Double) -> HistoryEntry {
+        var e = HistoryEntry(utterance: command, route: "command", layer: layer, result: "ok", command: command, actions: actions)
+        e.timestamp = Date(timeIntervalSince1970: 1_800_000_000 + t)
+        return e
+    }
+
+    func testSequencesAreNotCorrections() {
+        let entries = [entry("open first tab", layer: "fast", actions: [.switchTab(.index(1))], at: 0),
+                       entry("Open second tab", layer: "fast", actions: [.switchTab(.index(2))], at: 3)]
+        XCTAssertTrue(UsageLearner.candidates(from: entries, exclude: []).isEmpty)
+        XCTAssertTrue(UsageLearner.differsOnlyInSlot("scroll down a bit", "scroll up a bit"))
+        XCTAssertTrue(UsageLearner.isSequence([.switchTo("Chrome")], [.switchTo("Notes")]))
+        XCTAssertFalse(UsageLearner.isSequence([.switchTo("Chrome")], [.open("mail")]))
+    }
+
+    func testARealRephraseIsLearned() {
+        let entries = [entry("open my mail thing", layer: "model", actions: [.switchTo("Mail")], at: 0),
+                       entry("open mail", layer: "fast", actions: [.open("mail")], at: 4)]
+        let found = UsageLearner.candidates(from: entries, exclude: [])
+        XCTAssertEqual(found.first?.trigger, "open my mail thing")
+        XCTAssertEqual(found.first?.script, "open mail")
+    }
+
+    func testTheWrongSuggestionIsDroppedOnce() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sirena-learning-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let json = """
+        {"items":[{"score":5,"id":"041F3B31-F775-4D87-AD9F-33192A5925E7","script":"tab 2","createdAt":"2026-10-28T01:27:06Z",
+        "reason":"You rephrased “open first tab” as “Open second tab”","status":"pending","trigger":"open first tab"}],
+        "lastAddedDay":"2026-10-28","dismissed":[]}
+        """
+        try Data(json.utf8).write(to: dir.appendingPathComponent("suggestions.json"))
+        let s = Suggestions(directory: dir)
+        XCTAssertNil(s.suggestion(UUID(uuidString: "041F3B31-F775-4D87-AD9F-33192A5925E7")!))
+    }
+}

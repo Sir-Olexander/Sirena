@@ -41,7 +41,23 @@ public final class Suggestions: ObservableObject {
         url = dir.appendingPathComponent("suggestions.json")
         let dec = JSONDecoder(); dec.dateDecodingStrategy = .iso8601
         if let data = try? Data(contentsOf: url), let s = try? dec.decode(Stored.self, from: data) { stored = s }
-        refreshVisible()
+        if dropSequencesTakenForCorrections() { persist() } else { refreshVisible() }
+    }
+
+    /// Older versions read two commands in a row ("open first tab", "open second tab") as a correction; drop such
+    /// pending suggestions once (they may come back if real evidence appears later).
+    @discardableResult
+    func dropSequencesTakenForCorrections() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        let before = stored.items.count
+        stored.items.removeAll { s in
+            guard s.status == .pending, s.reason.hasPrefix("You rephrased"), let script = s.script else { return false }
+            let scriptActions = ShortcutScript.actions(ShortcutScript.parse(script).steps, values: [:])
+            let triggerActions = FastPathParser.parse(s.trigger)?.actions ?? []
+            let rephrased = s.reason.firstMatch("as “(.+)”$")?[1] ?? ""
+            return UsageLearner.isSequence(triggerActions, scriptActions) || UsageLearner.differsOnlyInSlot(s.trigger, rephrased)
+        }
+        return stored.items.count != before
     }
 
     private func persist() {
@@ -193,6 +209,26 @@ public enum UsageLearner {
         return true
     }
 
+    /// Words that change which item a command acts on, not what it does: numbers, ordinals, directions.
+    static let slotWords: Set<String> = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth", "last",
+                                         "next", "previous", "up", "down", "left", "right", "top", "bottom", "one", "two", "three", "four",
+                                         "five", "six", "seven", "eight", "nine", "ten", "primeiro", "segundo", "terceiro", "último", "ultimo"]
+
+    /// "open first tab" / "open second tab": the same command on another item, i.e. the next step of a sequence.
+    static func differsOnlyInSlot(_ a: String, _ b: String) -> Bool {
+        let x = key(a).split(separator: " ").map(String.init), y = key(b).split(separator: " ").map(String.init)
+        guard x.count == y.count, x != y else { return false }
+        return zip(x, y).allSatisfy { p, q in p == q || ((slotWords.contains(p) || Int(p) != nil) && (slotWords.contains(q) || Int(q) != nil)) }
+    }
+
+    /// Both are one action of the same kind with other arguments (tab 1 → tab 2, scroll down → scroll up, Chrome → Notes).
+    static func isSequence(_ a: [Action], _ b: [Action]) -> Bool {
+        let x = a.filter { if case .pause = $0 { return false }; return true }, y = b.filter { if case .pause = $0 { return false }; return true }
+        guard x.count == 1, y.count == 1, x != y else { return false }
+        func kind(_ act: Action) -> String { String(String(describing: act).prefix { $0 != "(" }) }
+        return kind(x[0]) == kind(y[0])
+    }
+
     static func tokenOverlap(_ a: String, _ b: String) -> Double {
         let x = Set(key(a).split(separator: " ")), y = Set(key(b).split(separator: " "))
         guard !x.isEmpty, !y.isEmpty else { return 0 }
@@ -226,6 +262,10 @@ public enum UsageLearner {
                     add(a.command!, script: script, reason: "You undid “\(a.command!)” and then said “\(b.command!)”", score: 4)
                 } else if let b = following.first(where: { isCommand($0) }), isSuccess(b), b.timestamp.timeIntervalSince(a.timestamp) < 10,
                           tokenOverlap(a.command!, b.command!) >= 0.5, key(a.command!) != key(b.command!), b.actions != a.actions,
+                          // A rephrase is a correction only with evidence: the first one did nothing, or needed the
+                          // model while the rephrased one ran on the fast path. Two steps of a sequence are not.
+                          (a.actions ?? []).isEmpty || (["model", "screen"].contains(a.layer ?? "") && ["fast", "shortcut"].contains(b.layer ?? "")),
+                          !differsOnlyInSlot(a.command!, b.command!), !isSequence(a.actions ?? [], b.actions ?? []),
                           let script = reproducibleScript(b.actions) {
                     add(a.command!, script: script, reason: "You rephrased “\(a.command!)” as “\(b.command!)”", score: 3)
                 }
