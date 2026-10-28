@@ -290,7 +290,8 @@ public final class CommandPipeline {
             if res.pendingConfirmation == nil { noteRepeatable(parsed.actions, label: parsed.label) }
         } catch {
             latency.actMs = Int(Date().timeIntervalSince(t1) * 1000)
-            overlay.showHint("Say “Sirena, \(text.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters)))” for that", autoClear: 3)
+            // Replaces the "Switching to …" label shown while trying.
+            overlay.showMessage("Say “Sirena, \(text.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters)))” for that", autoClear: 3)
             log(text, route: "ignored (no name)", layer: "fast", actions: parsed.actions, result: "not found without the model", latency: latency)
         }
     }
