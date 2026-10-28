@@ -58,7 +58,7 @@ final class HistoryViewModel: ObservableObject {
     var filtered: [HistoryEntry] {
         let q = search.lowercased()
         return entries.filter { e in
-            (session == nil || sessionKey(e) == session) &&
+            (session == nil || session == "all" || sessionKey(e) == session) &&
             (typeFilter == "All" || type(of: e) == typeFilter) &&
             (layerFilter == "All" || (e.layer ?? e.latency?.layer) == layerFilter) &&
             (q.isEmpty || e.utterance.lowercased().contains(q) || (e.result ?? "").lowercased().contains(q) || (e.action ?? "").lowercased().contains(q))
@@ -77,13 +77,13 @@ struct HistoryView: View {
     var body: some View {
         HSplitView {
             List(selection: $vm.session) {
-                Text("All sessions").tag(String?.none)
+                Text("All sessions").tag("all")
                 ForEach(vm.sessions) { s in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(HistoryView.day.string(from: s.start)).font(.system(size: 12, weight: .medium))
                         Text("\(Int(s.end.timeIntervalSince(s.start) / 60)) min · \(s.count) entries").font(.caption).foregroundColor(.secondary)
                     }
-                    .tag(String?.some(s.id))
+                    .tag(s.id)
                 }
             }
             .frame(minWidth: 180, idealWidth: 200, maxWidth: 260)

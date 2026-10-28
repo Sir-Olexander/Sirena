@@ -53,6 +53,16 @@ final class ShortcutsViewModel: ObservableObject {
         let parsed = ShortcutScript.parse(script)
         errors = script.isEmpty ? [] : parsed.errors
         warnings = parsed.warnings
+        // Tell the user where Sirena will ask first (added on save if missing).
+        if parsed.errors.isEmpty {
+            let safe = ShortcutScript.enforceConfirmations(parsed.steps)
+            let added = safe.filter { s in s.line.hasPrefix("confirm") } .count - parsed.steps.filter { $0.line.hasPrefix("confirm") }.count
+            if added > 0 {
+                for case .confirm(let q) in safe where !parsed.steps.contains(.confirm(q)) {
+                    warnings.append("Sirena will ask “\(q)” before that step (added when saving)")
+                }
+            }
+        }
     }
 
     func generate() {
@@ -131,7 +141,7 @@ struct ShortcutsView: View {
                                 Text(s.name)
                                 if s.learned { Text("learned").font(.caption2).padding(.horizontal, 4).background(Capsule().fill(Color.accentColor.opacity(0.2))) }
                             }
-                            .tag(Optional(s.id))
+                            .tag(s.id)
                         }
                     }
                     Section("Apple Shortcuts (say “run …”)") {

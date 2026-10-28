@@ -95,7 +95,9 @@ public final class CommandPipeline {
             await runShortcut(def, values: values, text: text, latency: latency)
             return
         }
-        if runPrefix, let apple = AppleShortcuts.match(rest) {
+        // Apple Shortcuts only on an explicit "run …" / "… shortcut …" (listing them spawns the shortcuts tool).
+        let explicitRun = text.firstMatch("^\\W*(?:please\\s+)?(?:run|execute|trigger)\\b") != nil || text.lowercased().contains("shortcut")
+        if runPrefix, explicitRun, let apple = AppleShortcuts.match(rest) {
             latency.planMs = Int(Date().timeIntervalSince(t0) * 1000)
             latency.layer = "shortcut"
             await executeDirect([.runAppleShortcut(apple)], label: "Running “\(apple)”", text: text, layer: "shortcut", latency: latency)

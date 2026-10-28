@@ -10,7 +10,7 @@ public final class DevPanelController {
 
     public func show() {
         if panel == nil {
-            let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 330, height: 420), styleMask: [.titled, .closable, .utilityWindow, .nonactivatingPanel, .resizable],
+            let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 340, height: 480), styleMask: [.titled, .closable, .utilityWindow, .nonactivatingPanel, .resizable],
                             backing: .buffered, defer: false)
             p.title = "Sirena — Dev"
             p.isFloatingPanel = true
@@ -40,6 +40,12 @@ struct DevPanelView: View {
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
+        ScrollView { content.padding(14) }
+            .frame(minWidth: 300, minHeight: 360)
+            .onReceive(timer) { now = $0 }
+    }
+
+    var content: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let s = stats.snapshot {
                 HStack {
@@ -78,12 +84,8 @@ struct DevPanelView: View {
                 Text("Sirena is off.").font(.headline)
                 Text("Usage appears here from the moment you turn her on.").font(.caption).foregroundColor(.secondary)
             }
-            Spacer()
-            Button("Open session log") { openLog() }.font(.system(size: 11))
+            Button("Open session log") { openLog() }.font(.system(size: 11)).padding(.top, 6)
         }
-        .padding(14)
-        .frame(minWidth: 300, minHeight: 360)
-        .onReceive(timer) { now = $0 }
     }
 
     func duration(_ s: SessionRecord) -> String {

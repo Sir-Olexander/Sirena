@@ -14,7 +14,7 @@ import SirenaCore
 ///   sirena-cli simulate ["utterance" ...] [--raw]   scripted utterances through router → pipeline (dry run) → overlay model
 
 // Simulations never touch the real history, notes, shortcuts or session log.
-if CommandLine.arguments.dropFirst().first == "simulate", ProcessInfo.processInfo.environment["SIRENA_DATA_DIR"] == nil {
+if ["simulate", "render-windows"].contains(CommandLine.arguments.dropFirst().first ?? ""), ProcessInfo.processInfo.environment["SIRENA_DATA_DIR"] == nil {
     setenv("SIRENA_DATA_DIR", "/tmp/sirena-sim", 1)
 }
 let args = Array(CommandLine.arguments.dropFirst())
@@ -261,6 +261,11 @@ case "render-overlay":
     render("7-confirm") { m in m.setState(.awake); m.showConfirm("Click “Send” in WhatsApp?", detail: "Safety check: the agent is about to send a message.") }
     render("8-screen-active", screen: "A") { m in m.setState(.awake); m.setScreenCount(2); m.setActiveScreen("A"); m.setFrontApp(name: "Google Chrome", icon: icon); m.showWorking("Moved Google Chrome to screen 2", autoClear: 60) }
     render("9-screen-inactive", screen: "B") { m in m.setState(.awake); m.setScreenCount(2); m.setActiveScreen("A"); m.setFrontApp(name: "Google Chrome", icon: icon); m.showWorking("Moved Google Chrome to screen 2", autoClear: 60) }
+
+case "render-windows":
+    // sirena-cli render-windows <dir>   — renders the dev panel, suggestions, shortcut book and notes windows with sample data
+    _ = NSApplication.shared
+    WindowPreviews.render(to: URL(fileURLWithPath: positional.first ?? "/tmp/sirena-windows"))
 
 case "simulate":
     var dictationRef: DictationEngine?
