@@ -34,6 +34,7 @@ public final class ModelCommandPlanner {
     - read_aloud reads the selection, the article or the page. save_note saves a note without leaving the app. choose_menu_item picks a menu bar item by path.
     - "Windows" phrasing maps to the Mac equivalent (Alt+Tab → cmd+tab, Ctrl+C → cmd+c, Alt+F4 → cmd+q, F5 → cmd+r).
     - To send a message or chat prompt: activate_app if needed, focus_element on the composer (or focus_composer), type_text with the message, then confirm("Send this message?") and finally press_keys("return"). Never press Enter to send, delete, submit a purchase or close unsaved work without a confirm step right before it. Never call confirm on its own: the tool calls it guards must follow it in the same turn (a "yes" runs exactly those).
+    - "the first link", "the second result", "the third video" on a web page → open_result (never a "skip to content" link).
     - Use scroll for scrolling, open_url for websites, web_search for searches. Closing more than one tab is always one close_tabs call ("close all tabs" → which=all); never a series of cmd+w and never cmd+shift+w.
     - If the request needs visual understanding that the element list cannot give (the element is not listed, positions matter, images, canvas apps), call need_screen with a concise goal so the screenshot fallback can take over. Only do this when direct tools cannot work.
     - If the user is not asking for an action (a question, a comment), reply in one short sentence instead of calling tools.
@@ -86,6 +87,8 @@ public final class ModelCommandPlanner {
                  parameters: ["type": "object", "properties": ["path": ["type": "string"]], "required": ["path"]]),
         ChatTool(name: "close_tabs", description: "Close several tabs of the front window at once: all of them (one empty tab stays), the tabs to the right or left of the active tab, all other tabs, or all tabs except one (keep = tab number).",
                  parameters: ["type": "object", "properties": ["which": ["type": "string", "enum": ["all", "right", "left", "others", "all_except"]], "keep": ["type": "integer"]], "required": ["which"]]),
+        ChatTool(name: "open_result", description: "Open the Nth result or link of the main content of the web page in front (search results, video lists, article lists). 1-based; -1 for the last.",
+                 parameters: ["type": "object", "properties": ["index": ["type": "integer"]], "required": ["index"]]),
         ChatTool(name: "need_screen", description: "Hand over to the screenshot-based fallback with a concise goal, when the element list is not enough.",
                  parameters: ["type": "object", "properties": ["goal": ["type": "string"]], "required": ["goal"]]),
     ]
@@ -252,6 +255,9 @@ public final class ModelCommandPlanner {
             return [.webSearch(q)]
         case "confirm":
             return [.confirmThen(message: s("message") ?? "Do it?", actions: [])]
+        case "open_result":
+            guard let i = args["index"]?.intValue, i != 0 else { return [] }
+            return [.openResult(i)]
         case "need_screen":
             return [.computerUse(goal: s("goal") ?? "")]
         case "close_tabs":

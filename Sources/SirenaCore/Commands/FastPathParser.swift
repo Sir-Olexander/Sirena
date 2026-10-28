@@ -155,7 +155,7 @@ public enum FastPathParser {
         switch a {
         case .scroll, .scrollTo, .switchTab, .newTab, .reopenTab, .goBack, .goForward, .switchTo, .activateApp, .open, .focusScreen,
              .moveWindowToScreen, .mediaKey, .zoomWindow, .clickNumber, .showNumbers, .hideNumbers, .pause, .readingControl,
-             .copyText, .selectText, .repeatLast:
+             .copyText, .selectText, .repeatLast, .openResult:
             return true
         case .inApp(_, let inner): return isSafeWithoutName(inner)
         case .clickElement(let label): return !Action.irreversibleLabel(label)
@@ -207,6 +207,7 @@ public enum FastPathParser {
 
     static func parseSingle(_ text: String, _ t: String, context: Context) -> ParsedCommand? {
         if let c = textQueryCommand(t) { return c }
+        if let c = resultCommand(t) { return c }
         if let c = appQualifiedTab(t) { return c }
         if let c = noteCommand(text, t) { return c }
         if let c = typeCommand(text, t) { return c }
@@ -490,6 +491,30 @@ public enum FastPathParser {
             if target.firstMatch("\\b(field|box|input|area|bar|button|link|menu|checkbox|icon)$") != nil { continue }
             if p.hasPrefix("^(.+?)") { target += " app" }   // "Google app" keeps the word for the open rule
             return ParsedCommand(isOpen ? .open(target) : .switchTo(target))
+        }
+        return nil
+    }
+
+    // MARK: Links and results on a page
+
+    static let resultOrdinals = "first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|last|1st|2nd|3rd|4th|5th|6th|7th|8th|9th|10th|"
+        + "primeiro|segundo|terceiro|quarto|quinto|primeira|segunda|terceira|quarta|quinta|último|ultimo|última|ultima"
+    static let resultOrdinalValues: [String: Int] = ["primeiro": 1, "primeira": 1, "segundo": 2, "segunda": 2, "terceiro": 3, "terceira": 3,
+                                                     "quarto": 4, "quarta": 4, "quinto": 5, "quinta": 5, "último": -1, "ultimo": -1, "última": -1, "ultima": -1]
+
+    /// "open the first link", "first result", "enter first link", "the second one", "click the third video", "result number 2".
+    static func resultCommand(_ t: String) -> ParsedCommand? {
+        let verb = "(?:(?:open|click|click on|enter|go to|go into|select|choose|tap|tap on|visit|follow|press|abre|abrir|clica|clicar|clica em|entra|entra em|entrar)\\s+)?"
+        let article = "(?:(?:the|o|a|no|na)\\s+)?"
+        let noun = "(?:link|links|result|search result|video|article|one|hit|story|post|resultado|vídeo|artigo|ligação)"
+        let suffix = "(?:\\s+(?:on the page|on this page|in the list|on the list|in the results|here|below|da lista|da página))?"
+        if let m = t.firstMatch("^" + verb + article + "(" + resultOrdinals + ")\\s+" + noun + suffix + "$") {
+            let w = m[1]
+            guard let n = resultOrdinalValues[w] ?? ordinal(w) else { return nil }
+            return ParsedCommand(.openResult(n))
+        }
+        if let m = t.firstMatch("^" + verb + article + "(?:link|result|search result|resultado)\\s+(?:number\\s+|número\\s+)?(\\S+)$"), let n = Numbers.parse(m[1]) {
+            return ParsedCommand(.openResult(n))
         }
         return nil
     }

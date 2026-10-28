@@ -38,6 +38,8 @@ enum UndoRecord {
     case tabSwitched(browser: BrowserInfo, previousIndex: Int)
     case tabsClosed(browser: AppInfo, count: Int)
     case keyPressed
+    /// A link was followed: undo goes back.
+    case navigated
     case generic
 }
 
@@ -199,6 +201,8 @@ public final class ActionExecutor {
                 throw ExecutionError.unresolved(name)
             }
             return try perform(inner, snapshot: &snap)
+        case .openResult(let n):
+            return try openResult(n, snapshot: snap)
         case .copyText(let q), .selectText(let q):
             var isCopy = false
             if case .copyText = action { isCopy = true }
@@ -654,6 +658,24 @@ public final class ActionExecutor {
         return false
     }
 
+    // MARK: - Results and links on a page
+
+    /// The Nth link of the page's main content; with no web page in front it is left to the model.
+    private func openResult(_ n: Int, snapshot snap: ScreenSnapshot) throws -> String {
+        guard let front = snap.frontApp else { throw ExecutionError.unresolved("result \(n)") }
+        let links = PageLinks.links(pid: front.pid)
+        guard !links.isEmpty else { throw ExecutionError.unresolved(n == -1 ? "the last result" : "result \(n)") }
+        let i = n == -1 ? links.count - 1 : n - 1
+        guard links.indices.contains(i) else { throw ExecutionError.failed("This page shows \(links.count) result\(links.count == 1 ? "" : "s")") }
+        let link = links[i]
+        if !(link.element?.perform(kAXPressAction) ?? false) {
+            Mouse.click(at: CGPoint(x: link.frame.minX + min(20, link.frame.width / 2), y: link.frame.midY))
+        }
+        context.invalidateBrowserCache()
+        undoStack.append(.navigated)
+        return "Opened “\(link.title.prefix(40))”"
+    }
+
     // MARK: - Copy / select text on screen
 
     private func copyOrSelect(_ q: TextQuery, copy: Bool, snapshot snap: ScreenSnapshot) throws -> String {
@@ -771,6 +793,9 @@ public final class ActionExecutor {
             RunningApps.activate(browser.app)
             BrowserControl.activateTab(index: previousIndex, in: browser)
             return "Back to tab \(previousIndex)"
+        case .navigated:
+            Keyboard.press(KeyCombo("[", [.command]))
+            return "Back"
         case .keyPressed, .generic:
             Keyboard.press(KeyCombo("z", [.command]))
             return "Undo (⌘Z)"

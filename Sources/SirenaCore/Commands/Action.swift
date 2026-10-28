@@ -101,6 +101,8 @@ public indirect enum Action: Equatable, Codable {
     case openNotesWindow, openShortcutsWindow, openHistoryWindow
     /// "again", "more": run the last fast-path command once more.
     case repeatLast
+    /// "open the first result", "the second one": the Nth link of the page's main content (-1 = last).
+    case openResult(Int)
 
     /// Control actions are handled by the listening controller, not the executor.
     public var isControl: Bool {
@@ -209,6 +211,7 @@ public indirect enum Action: Equatable, Codable {
         case .selectText(let q): return "Selecting \(q.spoken)"
         case .readText(let q): return "Reading \(q.spoken)"
         case .repeatLast: return "Again"
+        case .openResult(let n): return n == -1 ? "Opening the last result" : "Opening result \(n)"
         }
     }
 }

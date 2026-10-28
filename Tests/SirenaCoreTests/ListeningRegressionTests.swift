@@ -236,3 +236,46 @@ final class CloseAllTabsTests: XCTestCase {
         XCTAssertEqual(BrowserControl.windowSelector(kind: .safari, wanted: nil), "set w to front window")
     }
 }
+
+/// "first link" and "the second one" went to the model six times; once it clicked "Avançar para o conteúdo principal".
+final class ResultLinkTests: XCTestCase {
+    func parse(_ s: String) -> [Action]? { FastPathParser.parse(s)?.actions }
+
+    func testPhrases() {
+        XCTAssertEqual(parse("first link"), [.openResult(1)])
+        XCTAssertEqual(parse("Enter first link"), [.openResult(1)])
+        XCTAssertEqual(parse("open the first result"), [.openResult(1)])
+        XCTAssertEqual(parse("The second one."), [.openResult(2)])
+        XCTAssertEqual(parse("click the third video"), [.openResult(3)])
+        XCTAssertEqual(parse("the last result"), [.openResult(-1)])
+        XCTAssertEqual(parse("result number 4"), [.openResult(4)])
+        XCTAssertEqual(parse("abre o primeiro resultado"), [.openResult(1)])
+        XCTAssertEqual(parse("go to the first tab"), [.switchTab(.first)])
+        XCTAssertEqual(parse("close all tabs but the first one"), [.closeTabs(.allExcept(.first))])
+        XCTAssertEqual(ModelCommandPlanner.actions(for: "open_result", args: .object(["index": 2])), [.openResult(2)])
+        XCTAssertEqual(UtteranceRouter.route("first link", context: RouterContext(state: .awake, inSoftWindow: true)), .fastPathOnly("first link"))
+    }
+
+    func testOrderingSkipsSkipLinksAndPrefersResults() {
+        func link(_ t: String, y: CGFloat, url: String? = nil, heading: Bool = false) -> PageLink {
+            PageLink(title: t, url: url, element: nil, frame: CGRect(x: 100, y: y, width: 300, height: 20), isHeadingLink: heading)
+        }
+        let page = [
+            link("Avançar para o conteúdo principal", y: 5, heading: false),
+            link("Wikipedia Arthur Morgan", y: 300, url: "https://en.wikipedia.org/wiki/Arthur_Morgan", heading: true),
+            link("en.wikipedia.org › wiki", y: 280, url: "https://en.wikipedia.org/wiki/Arthur_Morgan"),
+            link("Arthur Morgan | Red Dead Wiki", y: 420, url: "https://reddead.fandom.com/wiki/Arthur_Morgan", heading: true),
+            link("Images", y: 120),
+            link("Arthur Morgan - YouTube", y: 540, url: "https://youtube.com/watch?v=1", heading: true),
+        ]
+        let ordered = PageLinks.ordered(page, visibleIn: CGRect(x: 0, y: 0, width: 1200, height: 800))
+        XCTAssertEqual(ordered.map(\.title), ["Wikipedia Arthur Morgan", "Arthur Morgan | Red Dead Wiki", "Arthur Morgan - YouTube"])
+        XCTAssertTrue(PageLinks.isSkipLink("Skip to main content"))
+        XCTAssertTrue(PageLinks.isSkipLink("Avançar para o conteúdo principal"))
+        XCTAssertFalse(PageLinks.isSkipLink("Arthur Morgan - Wikipedia"))
+        // A page without result headings: links of two words or more, duplicates once.
+        let plain = PageLinks.ordered([link("Home", y: 10), link("Read the full story", y: 200, url: "https://a.b/s"),
+                                       link("Read the full story again", y: 260, url: "https://a.b/s#top")], visibleIn: nil)
+        XCTAssertEqual(plain.map(\.title), ["Read the full story"])
+    }
+}

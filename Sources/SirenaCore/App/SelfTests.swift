@@ -14,6 +14,7 @@ public enum SelfTests {
         case "mics": return mics()
         case "fallback": return await fallback()
         case "tabs": return await tabsTest()
+        case "results": return await resultsTest()
         case "finder-tabs": return await finderTabsTest()
         case "tabdump": return tabDump()
         case "finder-cleanup":
@@ -168,6 +169,43 @@ public enum SelfTests {
         lines.append("close all tabs → \(all?.summary ?? "error"); tabs left: \(afterAll?.tabs.count ?? -1) (expect 1: \(afterAll?.activeTab?.url ?? "?")), same window: \(afterAll?.windowId.map { "\($0)" } == wid)")
         _ = script("tell application \"Google Chrome\" to close window id \(wid)")
         lines.append("test window closed; Chrome windows now: \(ax.windows.count)")
+        return lines.joined(separator: "\n")
+    }
+
+    /// A temporary Chrome window with a search results page: what "the first / second result" would open.
+    static func resultsTest() async -> String {
+        guard let chrome = RunningApps.list().first(where: { $0.bundleId == "com.google.Chrome" }) else { return "Chrome is not running" }
+        var lines: [String] = []
+        guard let wid = BrowserControl.run("""
+            tell application "Google Chrome"
+                set w to make new window
+                set URL of active tab of w to "https://www.google.com/search?q=Arthur+Morgan+Red+Dead"
+                return (id of w) as text
+            end tell
+            """, timeout: 5) else { return "could not open the test window (Automation permission?)" }
+        RunningApps.activate(chrome)
+        var links: [PageLink] = []
+        let t0 = Date()
+        for _ in 0..<24 {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            links = PageLinks.links(pid: chrome.pid)
+            if links.count >= 4 { break }
+        }
+        let t1 = Date()
+        _ = PageLinks.links(pid: chrome.pid)
+        lines.append("results page: \(links.count) links after \(Int(t1.timeIntervalSince(t0) * 1000)) ms; one more read took \(Int(Date().timeIntervalSince(t1) * 1000)) ms")
+        for (i, l) in links.prefix(6).enumerated() {
+            lines.append("  \(i + 1). \(l.title.prefix(70))\(l.isHeadingLink ? "" : " (no heading)") — \(l.url?.prefix(60) ?? "?")")
+        }
+        lines.append("skip links in the list: \(links.filter { PageLinks.isSkipLink($0.title) }.count) (expect 0)")
+        let executor = ActionExecutor(context: ScreenContext(), numbers: NumbersMode(), inserter: .shared)
+        let before = BrowserControl.info(for: chrome)?.activeTab?.url ?? ""
+        let r = try? await executor.execute([.openResult(2)], snapshot: nil)
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        let after = BrowserControl.info(for: chrome)?.activeTab?.url ?? ""
+        lines.append("open the second result → \(r?.summary ?? "error"); page changed: \(after != before) (\(after.prefix(70)))")
+        _ = BrowserControl.run("tell application \"Google Chrome\" to close window id \(wid)", timeout: 5)
+        lines.append("test window closed")
         return lines.joined(separator: "\n")
     }
 
