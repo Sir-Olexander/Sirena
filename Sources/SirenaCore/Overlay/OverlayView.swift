@@ -14,7 +14,7 @@ public struct OverlayView: View {
     private var isActiveScreen: Bool {
         model.screenCount <= 1 || model.activeScreenID == nil || model.activeScreenID == screenID
     }
-    private var showsScreenMarker: Bool { model.screenCount > 1 && isActiveScreen && model.activeScreenID != nil }
+    private var showsScreenMarker: Bool { model.state != .off && model.screenCount > 1 && isActiveScreen && model.activeScreenID != nil }
 
     private var accent: Color {
         if model.readingState != .idle { return Color(red: 0.62, green: 0.52, blue: 1.0) }
