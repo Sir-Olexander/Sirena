@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import SwiftUI
 import SirenaCore
 
 /// Developer tool: exercises Sirena's pieces from the terminal without the app.
@@ -227,6 +228,39 @@ case "dictate":
         sem.signal()
     }
     sem.wait()
+
+case "render-overlay":
+    // sirena-cli render-overlay <dir>   — renders the pill in each state to PNGs (no permissions needed)
+    let dir = URL(fileURLWithPath: positional.first ?? "/tmp/sirena-overlay")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    _ = NSApplication.shared
+    let icon = NSWorkspace.shared.icon(forFile: "/Applications/Google Chrome.app")
+    func render(_ name: String, screen: String? = nil, _ setup: (OverlayModel) -> Void) {
+        let m = OverlayModel()
+        setup(m)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+        let view = NSHostingView(rootView: OverlayView(model: m, screenID: screen).padding(10).background(Color(nsColor: .windowBackgroundColor)))
+        view.frame = NSRect(origin: .zero, size: view.fittingSize)
+        view.layoutSubtreeIfNeeded()
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        try? rep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent("\(name).png"))
+        print("rendered \(name) \(Int(view.bounds.width))x\(Int(view.bounds.height))")
+    }
+    render("1-off") { _ in }
+    render("2-waiting") { $0.setState(.waiting) }
+    render("3-awake-expanded") { m in
+        m.setState(.awake); m.setFrontApp(name: "Google Chrome", icon: icon); m.showWorking("Switched to Google Chrome", autoClear: 60)
+        m.setLatency(LatencyReport(asrMs: 710, planMs: 1, actMs: 80, layer: "fast")); m.showLatency = true
+        for _ in 0..<30 { m.pushLevel(Float.random(in: 0.05...0.7)) }
+        m.setFollowUp(until: Date().addingTimeInterval(4))
+    }
+    render("4-awake-compact") { m in m.setState(.awake) }
+    render("5-dictating") { m in m.setState(.awake); m.setDictating(true); m.setPartial("um so the meeting is moved to Friday"); for _ in 0..<30 { m.pushLevel(Float.random(in: 0.05...0.7)) } }
+    render("6-reading") { m in m.setState(.awake); m.setFrontApp(name: "Google Chrome", icon: icon); m.setReading(.reading, title: "How Muse Spark works", progress: 0.35) }
+    render("7-confirm") { m in m.setState(.awake); m.showConfirm("Click “Send” in WhatsApp?", detail: "Safety check: the agent is about to send a message.") }
+    render("8-screen-active", screen: "A") { m in m.setState(.awake); m.setScreenCount(2); m.setActiveScreen("A"); m.setFrontApp(name: "Google Chrome", icon: icon); m.showWorking("Moved Google Chrome to screen 2", autoClear: 60) }
+    render("9-screen-inactive", screen: "B") { m in m.setState(.awake); m.setScreenCount(2); m.setActiveScreen("A"); m.setFrontApp(name: "Google Chrome", icon: icon); m.showWorking("Moved Google Chrome to screen 2", autoClear: 60) }
 
 case "simulate":
     var dictationRef: DictationEngine?
