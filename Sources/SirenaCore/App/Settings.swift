@@ -23,6 +23,8 @@ public final class Settings: ObservableObject {
     @Published public var noiseReduction: Bool { didSet { defaults.set(noiseReduction, forKey: "noiseReduction") } }
     /// While waiting, detect "Hey Sirena" on-device and keep audio off the network.
     @Published public var localWakeWord: Bool { didSet { defaults.set(localWakeWord, forKey: "localWakeWord") } }
+    /// Keep the sound other apps play (music, videos, calls) out of speech recognition.
+    @Published public var ignoreOwnAudio: Bool { didSet { defaults.set(ignoreOwnAudio, forKey: "ignoreOwnAudio") } }
 
     /// Seconds of silence before an awake Sirena goes back to waiting.
     public var idleTimeout: TimeInterval = 120
@@ -35,6 +37,18 @@ public final class Settings: ObservableObject {
     public var softFollowUpWindow: TimeInterval = 20
     /// Longer follow-up window while numbers are on screen, so there is time to read them.
     public var followUpWindowWithNumbers: TimeInterval = 15
+
+    /// Echo gate state learned per microphone/speaker pair.
+    public func echoLearned(for key: String) -> EchoGate.Learned? {
+        guard let all = defaults.dictionary(forKey: "echoLearned") as? [String: Data], let d = all[key] else { return nil }
+        return try? JSONDecoder().decode(EchoGate.Learned.self, from: d)
+    }
+
+    public func setEchoLearned(_ l: EchoGate.Learned, for key: String) {
+        var all = defaults.dictionary(forKey: "echoLearned") as? [String: Data] ?? [:]
+        all[key] = try? JSONEncoder().encode(l)
+        defaults.set(all, forKey: "echoLearned")
+    }
 
     /// Overlay position per screen: offset of the pill's bottom-center from the screen's origin.
     public func overlayOffset(forScreen id: String) -> CGPoint? {
@@ -72,6 +86,7 @@ public final class Settings: ObservableObject {
         globalShortcutEnabled = defaults.object(forKey: "globalShortcutEnabled") as? Bool ?? true
         localWakeWord = defaults.object(forKey: "localWakeWord") as? Bool ?? true
         noiseReduction = defaults.object(forKey: "noiseReduction") as? Bool ?? true
+        ignoreOwnAudio = defaults.object(forKey: "ignoreOwnAudio") as? Bool ?? true
         devMode = defaults.bool(forKey: "devMode")
         microphoneUID = defaults.string(forKey: "microphoneUID")
     }

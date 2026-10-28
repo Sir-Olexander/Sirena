@@ -17,6 +17,12 @@ public enum SelfTests {
         case "results": return await resultsTest()
         case "dictation": return await dictationTest()
         case "speculation": return await speculationTest()
+        case "echo": return await echoTest(args: args)
+        case "players":
+            return OtherAudio.players().map { p in
+                "\(p.name) (pid \(p.pid)): " + OtherAudio.outputDevices(of: p).map { d in "\(d.name) [\(d.reachesMicrophone ? "loudspeaker" : "headphones")]" }.joined(separator: ", ")
+            }.joined(separator: "\n") + "\ndefault output: \(OtherAudio.defaultOutput.name)"
+        case "echo-replay": return (await replayReport(URL(fileURLWithPath: args.first ?? "/tmp/sirena-echo"))).joined(separator: "\n")
         case "finder-tabs": return await finderTabsTest()
         case "tabdump": return tabDump()
         case "finder-cleanup":
@@ -172,6 +178,90 @@ public enum SelfTests {
         _ = script("tell application \"Google Chrome\" to close window id \(wid)")
         lines.append("test window closed; Chrome windows now: \(ax.windows.count)")
         return lines.joined(separator: "\n")
+    }
+
+    /// Real acoustics for the echo gate. Another process (`say`) reads a sentence through the speakers, like a video;
+    /// meanwhile this process says "Sirena, scroll down" (left out of the reference, so for the gate it is the user
+    /// talking over the video). Records the microphone and the Mac's own sound to /tmp/sirena-echo, then reports what
+    /// the recognizer hears with and without the gate. `echo vp` records with voice processing on.
+    static func echoTest(args: [String] = []) async -> String {
+        var lines: [String] = []
+        let output = OtherAudio.defaultOutput
+        lines.append("output: \(output.name)\(output.builtIn ? " (built-in speakers)" : ""); default input: \(AudioDevices.defaultInput?.name ?? "none")")
+        lines.append("Screen Recording permitted: \(SystemAudioTap.isPermitted)")
+        let rec = EchoRecording()
+        let tap = SystemAudioTap()
+        tap.onSamples = { s, t in rec.addReference(s, time: t) }
+        let cap = AudioCapture()
+        if let builtIn = AudioDevices.inputs().first(where: { $0.isBuiltIn }) { cap.preferredDeviceUID = builtIn.uid }
+        // Without voice processing by default: what Sirena records after its silence watchdog turns it off.
+        cap.voiceProcessing = args.contains("vp")
+        cap.onTimedChunk = { pcm, t in rec.addMic(pcm, time: t) }
+        // Like the app: the capture engine starts on the main thread.
+        do { try await MainActor.run { try cap.start() } } catch { return (lines + ["microphone: \(error.localizedDescription)"]).joined(separator: "\n") }
+        lines.append("microphone: \(cap.inputDescription)")
+        do { try await tap.start() } catch { await MainActor.run { cap.stop() }; return (lines + ["system audio: \(error.localizedDescription)"]).joined(separator: "\n") }
+        // "The user": rendered to a file now (nothing plays), played later by this process.
+        let userFile = URL(fileURLWithPath: "/tmp/sirena-echo-user.aiff")
+        let render = Process()
+        render.executableURL = URL(fileURLWithPath: "/usr/bin/say")
+        render.arguments = ["-v", "Daniel", "-o", userFile.path, "Sirena, scroll down."]
+        try? render.run()
+        render.waitUntilExit()
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        let say = Process()
+        say.executableURL = URL(fileURLWithPath: "/usr/bin/say")
+        // The "video" plays quieter than the "user" speaks (a person near the Mac over a video in the background).
+        say.arguments = ["-v", "Samantha", "[[volm 0.35]] This is a short sound check. Please switch to the second tab, then scroll down and open the first link. Thank you, that is all for now."]
+        try? say.run()
+        try? await Task.sleep(nanoseconds: 3_500_000_000)
+        // "The user" talks over it: this process's sound is not in the reference.
+        let player = try? AVAudioPlayer(contentsOf: userFile)
+        player?.volume = 1
+        player?.play()
+        lines.append("user voice: \(player.map { String(format: "%.1f s", $0.duration) } ?? "could not play")")
+        lines.append("playing during the test: \(OtherAudio.players().map(\.name).joined(separator: ", "))")
+        // Wait without blocking the main thread (the speech synthesizer plays from it).
+        while say.isRunning || (player?.isPlaying ?? false) { try? await Task.sleep(nanoseconds: 100_000_000) }
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        await MainActor.run { cap.stop() }
+        tap.stop()
+        let dir = URL(fileURLWithPath: "/tmp/sirena-echo")
+        rec.save(to: dir)
+        lines.append("recorded to \(dir.path): \(rec.summary)")
+        // As in the app: built-in speakers into the built-in microphone start from the coupling measured before.
+        lines += await replayReport(dir, seed: output.builtIn ? .builtInSpeakersAndMic : nil)
+        return lines.joined(separator: "\n")
+    }
+
+    /// Runs a recording made by `echoTest` through a fresh echo gate and transcribes it with and without the gate.
+    static func replayReport(_ dir: URL, seed: EchoGate.Learned? = nil) async -> [String] {
+        guard let rec = EchoRecording.load(from: dir) else { return ["no recording in \(dir.path)"] }
+        func makeGate() -> EchoGate { let g = EchoGate(); if let seed { g.seed(seed) }; return g }
+        let gate = makeGate()
+        let gated = rec.replay(through: gate)
+        var lines = ["gate: delay \(gate.delayFrames * 10) ms, \(gate.gatedChunks) chunks silenced, \(gate.passedChunks) passed while sound played; coupling \(gate.learnedCoupling.map { $0.map { String(format: "%.0f", $0) }.joined(separator: " ") } ?? "not learned")"]
+        lines.append("timeline (each mark 80 ms; ▮ sent, · silenced, ─ no reference):")
+        lines.append("  " + gated.marks)
+        guard let key = APIKeyStore.load() else { return lines + ["no API key: transcripts skipped"] }
+        let client = MetaAPIClient(apiKey: key)
+        let rawText = (try? await client.transcribe(wav: WAV.wrap(pcm: rec.micPCM), keywords: ["Sirena"])) ?? "(error)"
+        let gatedText = (try? await client.transcribe(wav: WAV.wrap(pcm: gated.pcm), keywords: ["Sirena"])) ?? "(error)"
+        lines.append("recognizer without the gate: “\(rawText)”")
+        lines.append("recognizer with the gate: “\(gatedText)”")
+        // The user talking over the playback: their line mixed into the microphone at known levels.
+        if let voice = EchoRecording.samples(of: URL(fileURLWithPath: "/tmp/sirena-echo-user.aiff")) {
+            for dB in [6, 10] as [Float] {
+                let mixed = rec.mixingVoice(voice, at: 5 * Int(EchoGate.sampleRate), overEchoDB: dB)
+                let raw = (try? await client.transcribe(wav: WAV.wrap(pcm: mixed.micPCM), keywords: ["Sirena"])) ?? "(error)"
+                let g = mixed.replay(through: makeGate())
+                let text = (try? await client.transcribe(wav: WAV.wrap(pcm: g.pcm), keywords: ["Sirena"])) ?? "(error)"
+                lines.append("user “Sirena, scroll down” \(Int(dB)) dB over the playback:")
+                lines.append("  without the gate: “\(raw)”")
+                lines.append("  with the gate:    “\(text)”   \(g.marks)")
+            }
+        }
+        return lines
     }
 
     /// Time from the final transcript to the end of a model command, with and without the work started when

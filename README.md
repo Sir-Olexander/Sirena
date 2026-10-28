@@ -146,6 +146,8 @@ open -n build/Sirena.app --args --selftest tabs /tmp/tabs.txt                   
 open -n build/Sirena.app --args --selftest results /tmp/results.txt             # "first / second result" on a temporary Google page
 open -n build/Sirena.app --args --selftest dictation /tmp/dictation.txt         # cleanup and lists with the real model, dry run
 open -n build/Sirena.app --args --selftest speculation /tmp/speculation.txt     # model commands with and without the early start
+open -n build/Sirena.app --args --selftest echo /tmp/echo.txt                   # plays a sentence aloud; what the recognizer hears with/without the echo gate
+open -n build/Sirena.app --args --selftest players /tmp/players.txt             # apps playing sound and their output devices
 ```
 
 Set `SIRENA_DEBUG_DUMP=/some/dir` to write every model request and response body there.
@@ -157,7 +159,8 @@ System Settings pane:
 
 * **Microphone**, required.
 * **Accessibility**, required (clicks, typing, shortcuts, the element list).
-* **Screen Recording**, only for the screenshot fallback.
+* **Screen Recording**, for the screenshot fallback and to tell the Mac's own sound (music, videos) apart from
+  your voice.
 * **Automation**, to switch tabs in Chrome and Safari (macOS asks the first time a browser is controlled).
 
 ## Using Sirena
@@ -201,6 +204,18 @@ is connected to a phone). Sirena notices after three seconds, says "No sound fro
 <other microphone>" and switches. Noise reduction (Apple voice processing) works only on the system default
 input, so a microphone chosen this way is captured without it; set it as the input in System Settings → Sound to
 get noise reduction too.
+
+### Music and videos playing on the Mac
+
+Apple's echo cancellation only removes sound Sirena plays herself, and it is off whenever the microphone in use
+is not the system default. So while another app plays sound and Sirena listens (awake or waiting for "Hey
+Sirena"), she captures what the Mac plays (ScreenCaptureKit, audio only, her own voice left out) and compares the
+microphone with it every 10 ms: stretches where the microphone only hears the speakers reach the recognizer as
+silence, so lyrics and videos are neither typed nor taken for commands. Your voice over the music passes. It must
+be somewhat louder in the microphone than the speakers (6 dB was enough in tests on a MacBook Air); with loud music,
+speak up or pause it. What she learns about each microphone and speaker pair is kept. macOS shows its
+screen-recording indicator while this runs. "Ignore music and videos playing on this Mac" in the menu turns it off.
+With headphones nothing reaches the microphone and nothing needs to be done.
 
 ### On-device wake word
 

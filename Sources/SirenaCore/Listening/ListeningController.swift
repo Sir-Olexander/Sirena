@@ -1,10 +1,11 @@
 import Foundation
 import AppKit
+import CoreAudio
 
 /// The listening brain: off / waiting / awake, the "Sirena" rule, the follow-up window, dictation mode,
 /// confirmations and the idle timeout. Everything here runs on the main thread.
 public final class ListeningController {
-    public private(set) var state: ListeningState = .off { didSet { overlay.setState(state) } }
+    public private(set) var state: ListeningState = .off { didSet { overlay.setState(state); updateOtherAudioWatch() } }
     public private(set) var isDictating = false { didSet { overlay.setDictating(isDictating) } }
     public var pushToTalkKey: PushToTalkKey?
     public var onStateChange: ((ListeningState) -> Void)?
@@ -47,6 +48,16 @@ public final class ListeningController {
     private var lastPartial = ""
     /// Dictation inserts and edits still queued or running.
     private var pendingDictationWork = 0
+
+    // MARK: The Mac's own sound
+    /// Silences what only comes from the speakers (music, videos) before it reaches the recognizer.
+    private let echoGate = EchoGate()
+    private let systemAudio = SystemAudioTap()
+    private var otherAudioTimer: Timer?
+    private var otherAudioQuietSince: Date?
+    private var echoDevicesKey = ""
+    private var echoNoticeShown = false
+    private var echoPermissionHintShown = false
     private var idleTimer: Timer?
     private var keywordTimer: Timer?
     private var usingFallback = false
@@ -80,12 +91,18 @@ public final class ListeningController {
         transcriber.onEvent = { [weak self] e in self?.handle(e) }
         fallback?.keywordsProvider = { [weak self] in self?.context.keywords() ?? ["Sirena"] }
         fallback?.onEvent = { [weak self] e in self?.handle(e) }
-        audio.onChunk = { [weak self] pcm in
+        audio.onTimedChunk = { [weak self] pcm, time in
             guard let self else { return }
-            for chunk in self.gate.process(pcm) {
-                if self.usingFallback { self.fallback?.send(chunk, level: self.gate.privateMode ? 0 : self.lastLevel) } else { self.transcriber.send(chunk) }
+            // Music or a video playing on the Mac: what the microphone hears of it alone becomes silence.
+            for piece in self.echoGate.filter(pcm, time: time) {
+                let silent = !piece.contains { $0 != 0 }
+                for chunk in self.gate.process(piece) {
+                    if self.usingFallback { self.fallback?.send(chunk, level: self.gate.privateMode || silent ? 0 : self.lastLevel) } else { self.transcriber.send(chunk) }
+                }
             }
         }
+        systemAudio.onSamples = { [weak self] samples, time in self?.echoGate.addReference(samples, time: time) }
+        systemAudio.onStopped = { [weak self] _ in DispatchQueue.main.async { self?.otherAudioQuietSince = nil } }
         audio.onLevel = { [weak self] level, seconds in
             guard let self else { return }
             self.lastLevel = level
@@ -158,6 +175,80 @@ public final class ListeningController {
         case .waiting: wake(method: method)
         case .awake: turnOff()
         }
+    }
+
+    // MARK: - The Mac's own sound
+
+    /// While Sirena listens (awake, or waiting for "Hey Sirena": a song once woke her), check twice a second whether
+    /// other apps play sound; capture it as the echo reference only then (the capture shows the screen-recording
+    /// indicator, so it does not run otherwise).
+    private func updateOtherAudioWatch() {
+        if state != .off, settings.ignoreOwnAudio, !simulateInput {
+            guard otherAudioTimer == nil else { return }
+            otherAudioTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.checkOtherAudio() }
+            checkOtherAudio()
+        } else {
+            otherAudioTimer?.invalidate(); otherAudioTimer = nil
+            otherAudioQuietSince = nil
+            if systemAudio.isRunning, !echoDevicesKey.isEmpty, let l = echoGate.learned { settings.setEchoLearned(l, for: echoDevicesKey) }
+            systemAudio.stop()
+        }
+    }
+
+    private func checkOtherAudio() {
+        guard state != .off, settings.ignoreOwnAudio else { updateOtherAudioWatch(); return }
+        // Another microphone or output device: the coupling learned so far no longer applies.
+        let output = OtherAudio.defaultOutput
+        let key = "\(audio.currentDeviceUID)|\(AudioDevices.string(output.id, kAudioDevicePropertyDeviceUID))"
+        if key != echoDevicesKey {
+            if !echoDevicesKey.isEmpty, let l = echoGate.learned { settings.setEchoLearned(l, for: echoDevicesKey) }
+            echoDevicesKey = key
+            echoGate.reset()
+            let builtInPair = output.builtIn && (AudioDevices.inputs().first { $0.uid == audio.currentDeviceUID }?.isBuiltIn ?? false)
+            if let l = settings.echoLearned(for: key) ?? (builtInPair ? .builtInSpeakersAndMic : nil) { echoGate.seed(l) }
+        }
+        let players = OtherAudio.players()
+        if !players.isEmpty {
+            otherAudioQuietSince = nil
+            guard !systemAudio.isRunning, !systemAudio.isStarting else {
+                if !echoNoticeShown, echoGate.status == .gating {
+                    echoNoticeShown = true
+                    overlay.showHint("Ignoring the sound \(players.first?.name ?? "the Mac") is playing", autoClear: 3)
+                }
+                return
+            }
+            guard SystemAudioTap.isPermitted else {
+                if !echoPermissionHintShown, !output.name.isEmpty {
+                    echoPermissionHintShown = true
+                    overlay.showMessage("Music is playing: allow Screen Recording for Sirena so she does not transcribe it", autoClear: 6)
+                }
+                return
+            }
+            Log.speech.notice("other audio playing (\(players.map(\.name).joined(separator: ", "), privacy: .public)) on \(output.name, privacy: .public): starting the echo reference")
+            Task { [systemAudio] in
+                do { try await systemAudio.start() } catch { Log.speech.error("echo reference: \(error.localizedDescription, privacy: .public)") }
+            }
+        } else if systemAudio.isRunning {
+            // Stop a few seconds after the sound stops (pauses between songs keep it running).
+            if let since = otherAudioQuietSince {
+                if Date().timeIntervalSince(since) > 5 {
+                    systemAudio.stop(); otherAudioQuietSince = nil
+                    if let l = echoGate.learned { settings.setEchoLearned(l, for: echoDevicesKey) }
+                }
+            } else {
+                otherAudioQuietSince = Date()
+            }
+        }
+    }
+
+    /// The "Ignore music and videos" setting changed.
+    public func applyOwnAudioSetting() { updateOtherAudioWatch() }
+
+    /// Diagnostics: what the echo gate is doing.
+    public var echoStatus: String {
+        guard settings.ignoreOwnAudio else { return "off" }
+        if !SystemAudioTap.isPermitted { return "needs Screen Recording" }
+        return systemAudio.isRunning ? "\(echoGate.status.rawValue), delay \(echoGate.delayFrames * 10) ms, \(echoGate.gatedChunks) chunks silenced" : "idle"
     }
 
     // MARK: - Microphone choice and silent microphones

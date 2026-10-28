@@ -24,6 +24,9 @@ public final class AudioCapture {
 
     /// Called on an audio thread with each 80 ms chunk.
     public var onChunk: ((Data) -> Void)?
+    /// Same chunks with the host time (seconds) of their first sample, to line them up with the Mac's own sound.
+    public var onTimedChunk: ((Data, Double) -> Void)?
+    private var pendingStartTime: Double = 0
     /// Called on an audio thread with an RMS level in 0...1 (roughly) and the duration it covers, per capture buffer.
     public var onLevel: ((Float, Double) -> Void)?
     /// Called on an audio thread with the raw microphone buffer (native format), for on-device recognition.
@@ -153,8 +156,9 @@ public final class AudioCapture {
         }
         setupStep = "tap"
         try catchingObjC("installTap") {
-            input.installTap(onBus: 0, bufferSize: 2048, format: inFormat) { [weak self] buffer, _ in
-                self?.process(buffer)
+            input.installTap(onBus: 0, bufferSize: 2048, format: inFormat) { [weak self] buffer, when in
+                let t = when.isHostTimeValid ? AVAudioTime.seconds(forHostTime: when.hostTime) : Double(DispatchTime.now().uptimeNanoseconds) / 1e9
+                self?.process(buffer, time: t)
             }
         }
         setupStep = "start"
@@ -218,7 +222,7 @@ public final class AudioCapture {
         }
     }
 
-    private func process(_ buffer: AVAudioPCMBuffer) {
+    private func process(_ buffer: AVAudioPCMBuffer, time: Double) {
         onBuffer?(buffer)
         guard let converter else { return }
         let ratio = outFormat.sampleRate / buffer.format.sampleRate
@@ -255,11 +259,14 @@ public final class AudioCapture {
         let rms = sqrt(sum / Float(max(count, 1)))
         onLevel?(min(1, rms * 6), Double(count) / outFormat.sampleRate)
         // Chunking
+        if pending.isEmpty { pendingStartTime = time }
         pending.append(UnsafeBufferPointer(start: ch[0], count: count))
         while pending.count >= AudioCapture.chunkBytes {
-            let chunk = pending.prefix(AudioCapture.chunkBytes)
-            onChunk?(Data(chunk))
+            let chunk = Data(pending.prefix(AudioCapture.chunkBytes))
+            onChunk?(chunk)
+            onTimedChunk?(chunk, pendingStartTime)
             pending.removeFirst(AudioCapture.chunkBytes)
+            pendingStartTime += Double(AudioCapture.chunkBytes / 2) / AudioCapture.sampleRate
         }
     }
 }

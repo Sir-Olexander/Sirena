@@ -70,7 +70,13 @@ public enum UtteranceRouter {
             return .ignore("off")
         case .waiting:
             if WakeWord.isWakePhrase(text) { return .wake }
-            if let rest = WakeWord.stripLeadingWakePhrase(text), !WakeWord.normalize(rest).isEmpty { return .wakeWithCommand(rest) }
+            if let rest = WakeWord.stripLeadingWakePhrase(text), !WakeWord.normalize(rest).isEmpty {
+                // "Hey Sirena, to my party in the club I'm so and everybody knows…" (a song heard as the wake phrase):
+                // a long rest that is neither a command nor a question only wakes her.
+                let shape = CommandShape.classify(rest, isKnownPhrase: isKnownPhrase)
+                if shape != .command, shape != .question, rest.split(separator: " ").count > 8 { return .wake }
+                return .wakeWithCommand(rest)
+            }
             return .ignore("waiting")
         case .awake:
             break

@@ -98,6 +98,10 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         nr.state = settings.noiseReduction ? .on : .off
         nr.toolTip = "Apple voice processing: noise suppression and echo cancellation before speech recognition."
         menu.addItem(nr)
+        let own = item("Ignore music and videos playing on this Mac", #selector(toggleOwnAudio), key: "")
+        own.state = settings.ignoreOwnAudio ? .on : .off
+        own.toolTip = "While another app plays sound, Sirena compares the microphone with it (Screen Recording permission) and does not transcribe what only comes from the speakers."
+        menu.addItem(own)
         let micMenu = NSMenu()
         let auto = NSMenuItem(title: "Automatic (system default, skips silent mics)", action: #selector(chooseMicrophone(_:)), keyEquivalent: "")
         auto.target = self
@@ -198,6 +202,7 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func toggleRaw() { settings.rawDictation.toggle(); onSettingsChanged?() }
     @objc private func chooseMicrophone(_ sender: NSMenuItem) { onSelectMicrophone?(sender.representedObject as? String) }
     @objc private func toggleNoise() { settings.noiseReduction.toggle(); onNoiseReductionToggled?(); onSettingsChanged?() }
+    @objc private func toggleOwnAudio() { settings.ignoreOwnAudio.toggle(); onSettingsChanged?() }
     @objc private func toggleLocalWake() { settings.localWakeWord.toggle(); onLocalWakeToggled?(); onSettingsChanged?() }
     @objc private func toggleLatency() { settings.showLatency.toggle(); onSettingsChanged?() }
     @objc private func toggleLarge() { settings.largeOverlay.toggle(); onSettingsChanged?() }

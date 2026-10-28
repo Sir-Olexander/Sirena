@@ -18,6 +18,23 @@ emits 80 ms chunks (3840 bytes). `RealtimeTranscriber` keeps one WebSocket sessi
 The `asr` latency shown in the overlay is the time between the audio frame where speech ended (as reported
 by `speechEnd.audioProcessedMs`) was sent and the `speechComplete` event.
 
+### The Mac's own sound (`EchoGate`, `SystemAudioTap`)
+
+Voice processing cancels only Sirena's own playback and only on the default input, so other apps' sound reached
+the recognizer (a song's "Hey, welcome…" was heard as "Hey Sirena", lyrics ran as commands). While Sirena is not
+off and Core Audio reports another process with output running, `SystemAudioTap` captures the system mix with
+ScreenCaptureKit (24 kHz mono, own process excluded, 2×2-pixel video ignored) as a reference stamped with host
+time; `AudioCapture` stamps every microphone chunk the same way. `EchoGate`, per 10 ms frame in five bands
+(150 Hz–6 kHz): estimates the reference-to-microphone delay from level envelopes; learns the coupling as the median
+of microphone-minus-reference on strong frames; predicts the echo with a reverberation tail and a few frames of
+slack, power-summed with the room-noise floor; a frame is a voice when the speech bands (400–3200 Hz) exceed the
+prediction by 6 dB. A chunk opens with 30 ms of voice, keeps 400 ms of hangover and releases the chunk before it
+(one chunk of lookahead, only while playback is active). Excess that rises and falls with the reference (r > 0.6
+over 300 ms) is louder echo, not a voice: the coupling is raised at once and fades back by 2 dB/s. A hiss rise
+above 3.2 kHz keeps the gate open within a phrase. Learned coupling is stored per microphone/speaker pair;
+built-in speakers into the built-in microphone start from values measured on a MacBook Air. Tuned on real
+recordings (`--selftest echo` records to /tmp/sirena-echo and transcribes with and without the gate).
+
 ### On-device wake word
 
 In the waiting state `LocalWakeWordDetector` runs `SFSpeechRecognizer` with `requiresOnDeviceRecognition`
