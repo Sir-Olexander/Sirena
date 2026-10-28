@@ -41,6 +41,12 @@ public final class EchoRecording {
                 marks += !refActive ? "─" : (isSent ? "▮" : "·")
             }
         }
+        for piece in gate.flush() {
+            out.append(piece)
+            let isSent = piece.contains { $0 != 0 }
+            sent.append(isSent)
+            marks += isSent ? "▮" : "·"
+        }
         return Replay(pcm: out, marks: marks, sent: sent)
     }
 

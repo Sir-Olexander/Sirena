@@ -263,6 +263,19 @@ case "render-overlay":
     render("8-screen-active", screen: "A") { m in m.setState(.awake); m.setScreenCount(2); m.setActiveScreen("A"); m.setFrontApp(name: "Google Chrome", icon: icon); m.showWorking("Moved Google Chrome to screen 2", autoClear: 60) }
     render("9-screen-inactive", screen: "B") { m in m.setState(.awake); m.setScreenCount(2); m.setActiveScreen("A"); m.setFrontApp(name: "Google Chrome", icon: icon); m.showWorking("Moved Google Chrome to screen 2", autoClear: 60) }
 
+case "echo-bench":
+    // sirena-cli echo-bench   — simulated music + voice through the echo canceller and gate: speed and result
+    for v in [nil, -12, -6] as [Float?] {
+        guard let scene = EchoSimulation.make(voiceOverEchoDB: v, echoDBFS: -27) else { print("no music file"); exit(1) }
+        let gate = EchoGate()
+        let t0 = Date()
+        let sent = scene.recording.replay(through: gate).sent
+        let secs = Date().timeIntervalSince(t0)
+        let r = EchoSimulation.score(sent, voiceRange: scene.voiceRange)
+        print(String(format: "voice %@: 16 s of audio in %.2f s (%.1f%% of one core), music leaked %.1f%%, voice passed %.0f%%, cancelled %.1f dB",
+                     v.map { String(format: "%+.0f dB", $0) } ?? "none", secs, secs / 16 * 100, r.leak * 100, r.voice * 100, gate.cancellationDB))
+    }
+
 case "render-windows":
     // sirena-cli render-windows <dir>   — renders the dev panel, suggestions, shortcut book and notes windows with sample data
     _ = NSApplication.shared

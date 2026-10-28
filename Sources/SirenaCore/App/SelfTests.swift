@@ -22,6 +22,7 @@ public enum SelfTests {
             return OtherAudio.players().map { p in
                 "\(p.name) (pid \(p.pid)): " + OtherAudio.outputDevices(of: p).map { d in "\(d.name) [\(d.reachesMicrophone ? "loudspeaker" : "headphones")]" }.joined(separator: ", ")
             }.joined(separator: "\n") + "\ndefault output: \(OtherAudio.defaultOutput.name)"
+        case "echo-sim": return await echoSimulationTest()
         case "echo-replay": return (await replayReport(URL(fileURLWithPath: args.first ?? "/tmp/sirena-echo"))).joined(separator: "\n")
         case "finder-tabs": return await finderTabsTest()
         case "tabdump": return tabDump()
@@ -231,6 +232,25 @@ public enum SelfTests {
         lines.append("recorded to \(dir.path): \(rec.summary)")
         // As in the app: built-in speakers into the built-in microphone start from the coupling measured before.
         lines += await replayReport(dir, seed: output.builtIn ? .builtInSpeakersAndMic : nil)
+        return lines.joined(separator: "\n")
+    }
+
+    /// Simulated music on the Mac (nothing is played) with the user's "Sirena, scroll down" at several levels under
+    /// the music's echo: what the recognizer gets with and without the echo canceller and gate.
+    static func echoSimulationTest() async -> String {
+        guard let key = APIKeyStore.load() else { return "no API key" }
+        let client = MetaAPIClient(apiKey: key)
+        var lines: [String] = []
+        for v in [nil, -12, -6] as [Float?] {
+            guard let scene = EchoSimulation.make(voiceOverEchoDB: v, echoDBFS: -27) else { return "no music file" }
+            let gate = EchoGate()
+            let gated = scene.recording.replay(through: gate)
+            let raw = (try? await client.transcribe(wav: WAV.wrap(pcm: scene.recording.micPCM), keywords: ["Sirena"])) ?? "(error)"
+            let clean = (try? await client.transcribe(wav: WAV.wrap(pcm: gated.pcm), keywords: ["Sirena"])) ?? "(error)"
+            lines.append(v.map { String(format: "user %.0f dB under the music's echo:", -$0) } ?? "music alone:")
+            lines.append("  without: “\(raw)”")
+            lines.append("  with:    “\(clean)”   (cancelled \(String(format: "%.0f", gate.cancellationDB)) dB)")
+        }
         return lines.joined(separator: "\n")
     }
 

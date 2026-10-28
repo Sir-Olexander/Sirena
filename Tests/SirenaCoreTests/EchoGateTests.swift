@@ -136,3 +136,37 @@ extension EchoGateTests {
         XCTAssertEqual(EchoGate.Learned.builtInSpeakersAndMic.coupling.count, EchoGate.bandEdges.count - 1)
     }
 }
+
+/// "When the music is playing, Sirena also doesn't listen to me": the music is subtracted, the voice is kept.
+final class EchoCancellerTests: XCTestCase {
+    func testCancelsTheEchoAndKeepsTheVoice() {
+        let music = EchoGateTests.music(seconds: 5)
+        // Speaker to microphone: 30 ms, two reflections, louder than the voice.
+        let echo: [Float] = (0..<music.count).map { i in
+            var v: Float = 0
+            for (d, g) in [(720, 0.4), (1000, 0.15), (1300, 0.08)] as [(Int, Float)] where i >= d { v += music[i - d] * g }
+            return v
+        }
+        let voice = EchoGateTests.voice(seconds: 0.8, level: 0.006)
+        let start = 4 * 24_000
+        let aec = EchoCanceller(partitions: 8)
+        var out = [Float](), voiceOut = [Float](), voiceIn = [Float]()
+        var b = 0
+        while (b + 1) * 240 <= music.count {
+            let r = (b * 240)..<((b + 1) * 240)
+            let v = r.map { $0 >= start && $0 - start < voice.count ? voice[$0 - start] : Float(0) }
+            let mic = (0..<240).map { echo[r.lowerBound + $0] + v[$0] }
+            let e = aec.process(mic: mic, reference: Array(music[r]), adapt: r.lowerBound < start)
+            out += e
+            if r.lowerBound >= start, r.lowerBound + 240 <= start + voice.count { voiceOut += zip(e, mic).map { $0.0 }; voiceIn += v }
+            b += 1
+        }
+        func db(_ x: ArraySlice<Float>) -> Float { 10 * log10(x.reduce(0) { $0 + $1 * $1 } / Float(max(1, x.count)) + 1e-12) }
+        let before = db(echo[(3 * 24_000)..<start]), after = db(out[(3 * 24_000)..<start])
+        XCTAssertGreaterThan(before - after, 15, "echo reduced by \(before - after) dB")
+        // During the voice, what is left is mostly the voice.
+        let leftover = zip(voiceOut, voiceIn).map { $0 - $1 }
+        XCTAssertGreaterThan(db(voiceIn[...]) - db(leftover[...]), 6)
+        XCTAssertEqual(aec.resets, 0)
+    }
+}
