@@ -118,6 +118,49 @@ public enum BrowserControl {
         return run(source) != nil || true
     }
 
+    public enum TabSwitch: Equatable {
+        /// Switched: the tab that was active before, the new one and its title.
+        case switched(previous: Int, index: Int, title: String)
+        case noSuchTab(count: Int)
+        /// The browser did not answer (no Automation permission, no window).
+        case unavailable
+    }
+
+    /// Switches to a tab by position in one AppleScript call (count, active index and switch together).
+    public static func switchTab(_ target: TabTarget, in app: AppInfo) -> TabSwitch {
+        guard let kind = kind(for: app.bundleId) else { return .unavailable }
+        let expr: String
+        switch target {
+        case .index(let n): expr = "\(n)"
+        case .first: expr = "1"
+        case .last: expr = "n"
+        case .next: expr = "(p mod n) + 1"
+        case .previous: expr = "((p - 2 + n) mod n) + 1"
+        case .title: return .unavailable
+        }
+        let name = appleScriptName(for: app)
+        let (getActive, setActive, activeTitle) = kind == .chromium
+            ? ("active tab index of w", "set active tab index of w to i", "title of active tab of w")
+            : ("index of current tab of w", "set current tab of w to tab i of w", "name of current tab of w")
+        let source = """
+        tell application "\(name)"
+            if (count of windows) = 0 then return ""
+            set w to front window
+            set n to count of tabs of w
+            set p to \(getActive)
+            set i to \(expr)
+            if i < 1 or i > n then return "none" & tab & (n as text)
+            \(setActive)
+            return (p as text) & tab & (i as text) & tab & (\(activeTitle))
+        end tell
+        """
+        guard let out = run(source), !out.isEmpty else { return .unavailable }
+        let parts = out.components(separatedBy: "\t")
+        if parts.first == "none" { return .noSuchTab(count: Int(parts.count > 1 ? parts[1] : "") ?? 0) }
+        guard parts.count >= 2, let p = Int(parts[0]), let i = Int(parts[1]) else { return .unavailable }
+        return .switched(previous: p, index: i, title: parts.count > 2 ? parts[2...].joined(separator: "\t") : "")
+    }
+
     /// Closes tabs of the front window by 1-based index (highest first, so the other indices stay valid).
     /// Returns false when the browser refused (e.g. no Automation permission).
     @discardableResult

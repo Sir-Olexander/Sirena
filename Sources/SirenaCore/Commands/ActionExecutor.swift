@@ -114,7 +114,7 @@ public final class ActionExecutor {
     // MARK: - Synchronous execution
 
     private func run(_ actions: [Action], snapshot: ScreenSnapshot?, rest: [Action], done: [String]) throws -> ExecutionResult {
-        var snap = snapshot ?? context.snapshot(includeElements: false)
+        var snap = snapshot ?? context.lightSnapshot()
         var summaries: [String] = done
         for (i, action) in actions.enumerated() {
             if case .confirmThen(let message, let inner) = action {
@@ -176,7 +176,7 @@ public final class ActionExecutor {
             } else if let url = RunningApps.installedAppURL(named: name) {
                 RunningApps.launch(url: url)
                 usleep(1_500_000)
-                snap = context.snapshot(includeElements: false, includeBrowser: false)
+                snap = context.lightSnapshot()
             } else {
                 throw ExecutionError.unresolved(name)
             }
@@ -301,7 +301,7 @@ public final class ActionExecutor {
         // An app with no windows (e.g. Chrome after its last window closed): reopen like the Dock does.
         let reopened = RunningApps.ensureWindow(app)
         undoStack.append(.appSwitched(previous: previous))
-        snap = context.snapshot(includeElements: false, includeBrowser: false)
+        snap = context.lightSnapshot()
         numbers.frontAppChanged(pid: app.pid)
         return reopened ? "Opened a new \(app.name) window" : "Switched to \(app.name)"
     }
@@ -542,6 +542,21 @@ public final class ActionExecutor {
     }
 
     private func switchBrowserTab(_ target: TabTarget, browser: AppInfo) throws -> String {
+        // By position: one AppleScript call that reads the tab count and switches (no tab listing first).
+        if case .title = target {} else {
+            switch BrowserControl.switchTab(target, in: browser) {
+            case .switched(let previous, let index, let title):
+                context.invalidateBrowserCache()
+                if let kind = BrowserControl.kind(for: browser.bundleId) {
+                    undoStack.append(.tabSwitched(browser: BrowserInfo(app: browser, kind: kind, tabs: [], activeIndex: previous), previousIndex: previous))
+                }
+                return "Tab \(index) “\(title.prefix(30))”"
+            case .noSuchTab(let count):
+                throw ExecutionError.failed("\(browser.name) has \(count) tab\(count == 1 ? "" : "s")")
+            case .unavailable:
+                return try switchTabWithKeys(target)
+            }
+        }
         if let info = context.browserInfo(for: browser) {
             guard let idx = BrowserControl.resolve(target, in: info) else {
                 if case .title(let t) = target { throw ExecutionError.unresolved(t) }
@@ -553,7 +568,11 @@ public final class ActionExecutor {
             let title = info.tabs.first { $0.index == idx }?.title ?? ""
             return "Tab \(idx) “\(title.prefix(30))”"
         }
-        // Without Automation permission fall back to keyboard shortcuts.
+        return try switchTabWithKeys(target)
+    }
+
+    /// Without Automation permission: the browser's own shortcuts.
+    private func switchTabWithKeys(_ target: TabTarget) throws -> String {
         switch target {
         case .next: Keyboard.press(KeyCombo("]", [.command, .shift])); return "Next tab"
         case .previous: Keyboard.press(KeyCombo("[", [.command, .shift])); return "Previous tab"

@@ -45,6 +45,15 @@ public final class ScreenContext {
 
     public init() {}
 
+    /// Front app and running apps only: all most actions need, with no Accessibility walk and no AppleScript.
+    /// Actions that need more (elements, tabs) fetch it themselves.
+    public func lightSnapshot() -> ScreenSnapshot {
+        var snap = ScreenSnapshot()
+        snap.apps = RunningApps.list()
+        snap.frontApp = RunningApps.frontmost()
+        return snap
+    }
+
     /// Builds a snapshot. Element collection costs 50–500 ms, so it is optional.
     public func snapshot(includeElements: Bool, includeBrowser: Bool = true, maxElements: Int = 150) -> ScreenSnapshot {
         var snap = ScreenSnapshot()
