@@ -26,8 +26,13 @@ public final class Settings: ObservableObject {
 
     /// Seconds of silence before an awake Sirena goes back to waiting.
     public var idleTimeout: TimeInterval = 120
-    /// Seconds after a command during which the next command works without the name.
-    public var followUpWindow: TimeInterval = 6
+    /// Seconds after a command during which the next command works without the name (measured at the start of speech).
+    public var followUpWindow: TimeInterval = 8
+    /// Follow-up window after "Hey Sirena" or a bare "Sirena": time to think of the command.
+    public var followUpAfterWake: TimeInterval = 12
+    /// After the follow-up window, until this many seconds after the last command, navigation commands the fast path
+    /// understands (scroll, tabs, apps) still work without the name; nothing else does.
+    public var softFollowUpWindow: TimeInterval = 20
     /// Longer follow-up window while numbers are on screen, so there is time to read them.
     public var followUpWindowWithNumbers: TimeInterval = 15
 

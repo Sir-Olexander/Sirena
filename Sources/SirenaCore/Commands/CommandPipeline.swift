@@ -32,6 +32,8 @@ public final class CommandPipeline {
     private var currentTask: Task<Void, Never>?
     /// The last saved shortcut that ran, for "Sirena, forget that".
     public private(set) var lastShortcutRun: (id: UUID, at: Date)?
+    /// The last command that ran without the model, for "again" / "more".
+    private var lastRepeatable: (actions: [Action], label: String, at: Date)?
 
     public init(context: ScreenContext, executor: ActionExecutor, planner: ModelCommandPlanner, computerUse: ComputerUseAgent,
                 overlay: OverlayModel, history: HistoryLog, settings: Settings, shortcuts: ShortcutBook = .shared, notes: NotesStore = .shared) {
@@ -52,7 +54,13 @@ public final class CommandPipeline {
 
     // MARK: - Entry
 
-    public func handle(command: String, asrMs: Int?) {
+    /// Whether the phrase runs one of the user's saved shortcuts.
+    public func isShortcutPhrase(_ text: String) -> Bool {
+        shortcuts.match(CommandPipeline.stripRunPrefix(text).1) != nil
+    }
+
+    /// - Parameter fastPathOnly: said without the name after the follow-up window: only the fast path may run it.
+    public func handle(command: String, asrMs: Int?, fastPathOnly: Bool = false) {
         let text = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         if isScreenAgentRunning {
@@ -67,7 +75,7 @@ public final class CommandPipeline {
         }
         if pending != nil || pendingContinuation != nil { cancelPending(silently: true) }
         currentTask?.cancel()
-        currentTask = Task { await self.process(text, asrMs: asrMs) }
+        currentTask = Task { await self.process(text, asrMs: asrMs, fastPathOnly: fastPathOnly) }
     }
 
     /// Runs a saved shortcut directly (shortcut book "Test", history "Run again").
@@ -87,18 +95,35 @@ public final class CommandPipeline {
                                     command: text, actions: actions, failed: failed ? true : nil, shortcutId: shortcutId))
     }
 
-    private func process(_ text: String, asrMs: Int?) async {
+    private func process(_ text: String, asrMs: Int?, fastPathOnly: Bool = false) async {
         isBusy = true
         defer { isBusy = false; onCommandFinished?() }
         var latency = LatencyReport(asrMs: asrMs)
         let t0 = Date()
 
+        // Only filler words ("uh", "okay"): nothing to do.
+        if FastPathParser.normalize(text).isEmpty {
+            overlay.showWorking("Yes?", autoClear: 1.5)
+            history.append(HistoryEntry(utterance: text, route: "attention", latency: latency))
+            return
+        }
+
         // 1. Sirena's own controls
         if let control = FastPathParser.controlCommand(text, context: fastPathContext()), control.actions.count == 1, let action = control.actions.first, action.isControl {
             latency.planMs = Int(Date().timeIntervalSince(t0) * 1000)
             latency.layer = "fast"
+            if fastPathOnly, !FastPathParser.isSafeWithoutName(control) {
+                log(text, route: "ignored (no name)", layer: nil, actions: nil, result: "needs the name", latency: latency)
+                return
+            }
+            if action == .repeatLast { await repeatLast(text, latency: latency); return }
             runControl(action, label: control.label)
             log(text, route: "control", layer: "fast", actions: [action], result: "ok", latency: latency)
+            return
+        }
+
+        if fastPathOnly {
+            await runFastPathOnly(text, latency: latency, started: t0)
             return
         }
 
@@ -131,6 +156,7 @@ public final class CommandPipeline {
             latency.planMs = Int(Date().timeIntervalSince(t0) * 1000)
             latency.layer = "fast"
             if let action = parsed.actions.first, action.isControl, parsed.actions.count == 1 {
+                if action == .repeatLast { await repeatLast(text, latency: latency); return }
                 runControl(action, label: parsed.label)
                 log(text, route: "control", layer: "fast", actions: [action], result: "ok", latency: latency)
                 return
@@ -142,6 +168,7 @@ public final class CommandPipeline {
                 latency.actMs = Int(Date().timeIntervalSince(t1) * 1000)
                 await finish(res, label: parsed.label, latency: latency, command: text, layer: "fast", shortcutId: nil)
                 log(text, layer: "fast", actions: parsed.actions, result: res.pendingConfirmation == nil ? res.summary : "awaiting confirmation", latency: latency)
+                if res.pendingConfirmation == nil { noteRepeatable(parsed.actions, label: parsed.label) }
                 return
             } catch ExecutionError.unresolved(let what) {
                 Log.commands.info("fast path could not resolve \(what, privacy: .public); going to the model")
@@ -158,8 +185,79 @@ public final class CommandPipeline {
             }
         }
 
+        // A command cut off before its object ("switch to", "click on"): ask for the rest instead of guessing.
+        if CommandShape.isIncomplete(FastPathParser.normalize(text)) {
+            overlay.showHint("I only heard “\(text.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters)))” — say the whole command", autoClear: 3)
+            log(text, route: "ignored (incomplete)", layer: nil, actions: nil, result: "incomplete", latency: latency)
+            return
+        }
+
         // 5. Model + direct actions, in a bounded loop (plan → act → fresh snapshot → …)
         await runModelLayer(text, latency: &latency)
+    }
+
+    /// Without the name after the follow-up window: a safe fast-path command or nothing (never the model).
+    private func runFastPathOnly(_ text: String, latency: LatencyReport, started t0: Date) async {
+        var latency = latency
+        guard let parsed = FastPathParser.parse(text, context: fastPathContext()), FastPathParser.isSafeWithoutName(parsed) else {
+            log(text, route: "ignored (no name)", layer: nil, actions: nil, result: "needs the name", latency: latency)
+            return
+        }
+        latency.planMs = Int(Date().timeIntervalSince(t0) * 1000)
+        latency.layer = "fast"
+        if let action = parsed.actions.first, action.isControl, parsed.actions.count == 1 {
+            if action == .repeatLast { await repeatLast(text, latency: latency); return }
+            runControl(action, label: parsed.label)
+            log(text, route: "control", layer: "fast", actions: [action], result: "ok", latency: latency)
+            return
+        }
+        overlay.showWorking(parsed.label, autoClear: 3)
+        let t1 = Date()
+        do {
+            let res = try await executor.execute(parsed.actions, snapshot: nil)
+            latency.actMs = Int(Date().timeIntervalSince(t1) * 1000)
+            await finish(res, label: parsed.label, latency: latency, command: text, layer: "fast", shortcutId: nil)
+            log(text, layer: "fast", actions: parsed.actions, result: res.pendingConfirmation == nil ? res.summary : "awaiting confirmation", latency: latency)
+            if res.pendingConfirmation == nil { noteRepeatable(parsed.actions, label: parsed.label) }
+        } catch {
+            latency.actMs = Int(Date().timeIntervalSince(t1) * 1000)
+            overlay.showHint("Say “Sirena, \(text.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters)))” for that", autoClear: 3)
+            log(text, route: "ignored (no name)", layer: "fast", actions: parsed.actions, result: "not found without the model", latency: latency)
+        }
+    }
+
+    /// Remembers a command for "again" / "more" (not sends, edits, notes or typing).
+    private func noteRepeatable(_ actions: [Action], label: String) {
+        let repeatable = actions.allSatisfy { a in
+            switch a {
+            case .confirmThen, .editText, .saveNote, .typeText, .insertSnippet, .pressReturnToSend, .computerUse, .runAppleShortcut: return false
+            default: return !a.isControl
+            }
+        }
+        if repeatable { lastRepeatable = (actions, label, Date()) }
+    }
+
+    /// "again", "more": the last command that ran without the model, once more.
+    private func repeatLast(_ text: String, latency: LatencyReport) async {
+        var latency = latency
+        guard let last = lastRepeatable, Date().timeIntervalSince(last.at) < 120 else {
+            overlay.showWorking("Nothing to repeat", autoClear: 2)
+            log(text, route: "control", layer: "fast", actions: [.repeatLast], result: "nothing to repeat", latency: latency)
+            return
+        }
+        overlay.showWorking(last.label, autoClear: 2.5)
+        let t1 = Date()
+        do {
+            let res = try await executor.execute(last.actions, snapshot: nil)
+            latency.actMs = Int(Date().timeIntervalSince(t1) * 1000)
+            latency.layer = "fast"
+            await finish(res, label: last.label, latency: latency, command: text, layer: "fast", shortcutId: nil)
+            log(text, layer: "fast", actions: last.actions, result: res.summary, latency: latency)
+            lastRepeatable = (last.actions, last.label, Date())
+        } catch {
+            overlay.showError(error.localizedDescription)
+            log(text, layer: "fast", actions: last.actions, result: "error: \(error.localizedDescription)", latency: latency, failed: true)
+        }
     }
 
     /// "run X", "run the shortcut X", "do X" → (true, "X").

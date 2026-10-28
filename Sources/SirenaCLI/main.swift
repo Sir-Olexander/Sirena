@@ -275,7 +275,9 @@ case "simulate":
     let overlay = OverlayModel()
     let context = ScreenContext()
     let numbers = NumbersMode()
-    let client = metaClient()
+    // Without a key the simulation still runs: model-bound commands then report the missing key.
+    let client: MetaAPIClient? = APIKeyStore.load().map { MetaAPIClient(apiKey: $0) }
+    if client == nil { print("(no API key: commands that need the model will report it)") }
     let executor = ActionExecutor(context: context, numbers: numbers, inserter: TextInserter.shared)
     executor.dryRun = true
     executor.textEditHandler = { instruction in

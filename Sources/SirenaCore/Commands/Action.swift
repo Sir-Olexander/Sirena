@@ -94,13 +94,15 @@ public indirect enum Action: Equatable, Codable {
     /// Copy / select / read a piece of the text on screen ("copy the first paragraph").
     case copyText(TextQuery), selectText(TextQuery), readText(TextQuery)
     case openNotesWindow, openShortcutsWindow, openHistoryWindow
+    /// "again", "more": run the last fast-path command once more.
+    case repeatLast
 
     /// Control actions are handled by the listening controller, not the executor.
     public var isControl: Bool {
         switch self {
         case .wait, .turnOff, .startDictation, .stopDictation, .showNumbers, .hideNumbers, .undo, .cancel, .newLine, .deleteLastChunk, .say,
              .readSelection, .readArticle, .readPage, .readingControl, .forgetLearnedShortcut,
-             .openNotesWindow, .openShortcutsWindow, .openHistoryWindow, .readText:
+             .openNotesWindow, .openShortcutsWindow, .openHistoryWindow, .readText, .repeatLast:
             return true
         default:
             return false
@@ -198,6 +200,7 @@ public indirect enum Action: Equatable, Codable {
         case .copyText(let q): return "Copying \(q.spoken)"
         case .selectText(let q): return "Selecting \(q.spoken)"
         case .readText(let q): return "Reading \(q.spoken)"
+        case .repeatLast: return "Again"
         }
     }
 }

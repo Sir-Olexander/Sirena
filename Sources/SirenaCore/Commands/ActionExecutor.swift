@@ -279,7 +279,7 @@ public final class ActionExecutor {
             throw ExecutionError.needsScreen(goal)
         case .wait, .turnOff, .startDictation, .stopDictation, .showNumbers, .hideNumbers, .undo, .cancel, .newLine, .deleteLastChunk,
              .readSelection, .readArticle, .readPage, .readingControl, .forgetLearnedShortcut,
-             .openNotesWindow, .openShortcutsWindow, .openHistoryWindow, .readText:
+             .openNotesWindow, .openShortcutsWindow, .openHistoryWindow, .readText, .repeatLast:
             return ""   // control actions are handled by the listening controller
         }
     }
