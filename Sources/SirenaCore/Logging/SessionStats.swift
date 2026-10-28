@@ -181,6 +181,15 @@ public final class SessionStats: ObservableObject {
 
     public func recordReconnect() { mutate { $0.reconnects += 1 } }
 
+    /// Where the recognizer's time goes: from the end of speech to the end being detected, and from there to the
+    /// final text (endpointing and post-processing are not tunable; work is started at the end of speech instead).
+    public func noteSpeechTail(endToTextMs: Int, recognizerMs: Int?) {
+        mutate { rec in
+            rec.latency["speech · end → final text", default: StageLatency()].add(endToTextMs)
+            if let r = recognizerMs { rec.latency["speech · end detected after", default: StageLatency()].add(max(1, r - endToTextMs)) }
+        }
+    }
+
     /// Derives per-layer counts, failures, latencies and wake methods from history entries.
     public func record(_ e: HistoryEntry) {
         mutate { rec in

@@ -419,3 +419,36 @@ final class SmallFixesTests: XCTestCase {
         XCTAssertNil(AX.find(label: "delete", in: els))
     }
 }
+
+/// Work started at the end of speech is used when the final transcript says the same.
+final class SpeculationTests: XCTestCase {
+    func testPlannerUsesTheReplyAlreadyInFlight() async throws {
+        let unreachable = MetaAPIClient(baseURL: URL(string: "http://127.0.0.1:9")!, apiKey: "unused")
+        let planner = ModelCommandPlanner(clientProvider: { unreachable }, modelName: { "muse-spark-1.3" })
+        let json = #"{"choices":[{"message":{"role":"assistant","content":"Paris."},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2}}"#
+        let reply = try JSONDecoder().decode(ChatResponse.self, from: Data(json.utf8))
+        let early = Task<ChatResponse, Error> { reply }
+        let plan = try await planner.run(command: "what's the capital of France", snapshotText: "Front app: Notes", firstResponse: early) { _, _ in
+            XCTFail("no actions expected"); return .init(summary: "", stop: true, newSnapshotText: nil)
+        }
+        XCTAssertEqual(plan.reply, "Paris.")
+    }
+
+    func testOnlyModelBoundCommandsArePrepared() {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sirena-spec-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let context = ScreenContext()
+        let executor = ActionExecutor(context: context, numbers: NumbersMode(), inserter: .shared)
+        let planner = ModelCommandPlanner(clientProvider: { nil }, modelName: { "" })
+        let pipeline = CommandPipeline(context: context, executor: executor, planner: planner,
+                                       computerUse: ComputerUseAgent(clientProvider: { nil }, modelName: { "" }), overlay: OverlayModel(),
+                                       history: HistoryLog(directory: dir), settings: Settings(defaults: UserDefaults(suiteName: "sirena-tests")!),
+                                       shortcuts: ShortcutBook(directory: dir), notes: NotesStore(directory: dir))
+        XCTAssertFalse(pipeline.needsModel("scroll down"))
+        XCTAssertFalse(pipeline.needsModel("okay next tab"))
+        XCTAssertFalse(pipeline.needsModel("switch to"))
+        XCTAssertFalse(pipeline.needsModel("wait"))
+        XCTAssertTrue(pipeline.needsModel("turn on the Bluetooth"))
+        XCTAssertTrue(pipeline.needsModel("what's the capital of France"))
+    }
+}

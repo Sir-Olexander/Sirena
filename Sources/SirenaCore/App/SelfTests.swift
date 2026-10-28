@@ -16,6 +16,7 @@ public enum SelfTests {
         case "tabs": return await tabsTest()
         case "results": return await resultsTest()
         case "dictation": return await dictationTest()
+        case "speculation": return await speculationTest()
         case "finder-tabs": return await finderTabsTest()
         case "tabdump": return tabDump()
         case "finder-cleanup":
@@ -170,6 +171,63 @@ public enum SelfTests {
         lines.append("close all tabs → \(all?.summary ?? "error"); tabs left: \(afterAll?.tabs.count ?? -1) (expect 1: \(afterAll?.activeTab?.url ?? "?")), same window: \(afterAll?.windowId.map { "\($0)" } == wid)")
         _ = script("tell application \"Google Chrome\" to close window id \(wid)")
         lines.append("test window closed; Chrome windows now: \(ax.windows.count)")
+        return lines.joined(separator: "\n")
+    }
+
+    /// Time from the final transcript to the end of a model command, with and without the work started when
+    /// speech ended (snapshot + first model call). Simulated input, dry-run executor: nothing acts on the Mac.
+    static func speculationTest() async -> String {
+        guard let key = APIKeyStore.load() else { return "no API key" }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sirena-speculation-test")
+        try? FileManager.default.removeItem(at: dir)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let client = MetaAPIClient(apiKey: key)
+        let history = HistoryLog(directory: dir)
+        let (controller, pipeline): (ListeningController, CommandPipeline) = await MainActor.run {
+            let settings = Settings(defaults: UserDefaults(suiteName: "sirena-selftest") ?? .standard)
+            let context = ScreenContext(), numbers = NumbersMode(), overlay = OverlayModel()
+            let executor = ActionExecutor(context: context, numbers: numbers, inserter: .shared)
+            executor.dryRun = true
+            let planner = ModelCommandPlanner(clientProvider: { client }, modelName: { "muse-spark-1.3" })
+            let pipeline = CommandPipeline(context: context, executor: executor, planner: planner,
+                                           computerUse: ComputerUseAgent(clientProvider: { nil }, modelName: { "" }), overlay: overlay,
+                                           history: history, settings: settings, shortcuts: ShortcutBook(directory: dir), notes: NotesStore(directory: dir))
+            let dictation = DictationEngine(clientProvider: { client }, modelName: { "muse-spark-1.3" }, skipCleanup: { false })
+            dictation.dryRun = true
+            let controller = ListeningController(settings: settings, overlay: overlay, context: context, pipeline: pipeline, dictation: dictation,
+                                                 transcriber: RealtimeTranscriber(apiKey: nil), audio: AudioCapture(), fallback: nil, history: history, numbers: numbers)
+            controller.simulateInput = true
+            controller.turnOn()
+            return (controller, pipeline)
+        }
+        var lines: [String] = []
+        var turn = 100
+        func utter(_ text: String, early: Bool) async -> Int {
+            turn += 1
+            let t = turn
+            await MainActor.run {
+                controller.inject(.speechStart(turnId: t))
+                controller.inject(.partial(text: text))
+                if early { controller.inject(.speechEnd(turnId: t)) }
+            }
+            try? await Task.sleep(nanoseconds: 800_000_000)   // the recognizer's usual wait for the final text
+            let before = history.recent(500).count
+            let t0 = Date()
+            await MainActor.run { controller.inject(.final(text: text, turnId: t, asrLatencyMs: 800)) }
+            while history.recent(500).count == before, Date().timeIntervalSince(t0) < 30 { try? await Task.sleep(nanoseconds: 20_000_000) }
+            return Int(Date().timeIntervalSince(t0) * 1000)
+        }
+        var plain: [Int] = [], early: [Int] = []
+        for (i, country) in ["Italy", "Spain", "Japan", "Brazil", "Kenya", "Canada"].enumerated() {
+            let ms = await utter("Sirena, what is the capital of \(country)?", early: i % 2 == 1)
+            if i % 2 == 1 { early.append(ms) } else { plain.append(ms) }
+            lines.append("\(i % 2 == 1 ? "early start" : "no early start"): capital of \(country) → \(ms) ms after the final text")
+            _ = pipeline
+        }
+        let avg = { (a: [Int]) in a.isEmpty ? 0 : a.reduce(0, +) / a.count }
+        lines.append("average after the final text: without \(avg(plain)) ms, with the early start \(avg(early)) ms")
+        for e in history.recent(20) where e.route == "command" { lines.append("  \(e.utterance) → \(e.result ?? "") [\(e.latency?.summary ?? "")]") }
+        await MainActor.run { controller.turnOff() }
         return lines.joined(separator: "\n")
     }
 

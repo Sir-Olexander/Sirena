@@ -137,9 +137,18 @@ public final class ModelCommandPlanner {
         public init(summary: String, stop: Bool, newSnapshotText: String?) { self.summary = summary; self.stop = stop; self.newSnapshotText = newSnapshotText }
     }
 
+    /// The first request of the agent loop, so it can be sent before the final transcript arrives.
+    public func firstRequest(command: String, snapshotText: String, client: MetaAPIClient) -> ChatRequest {
+        ChatRequest(model: modelName(), messages: [.system(ModelCommandPlanner.systemPrompt),
+                                                   .user("Screen snapshot:\n\(snapshotText)\n\nSpoken command: \"\(command)\"")],
+                    tools: ModelCommandPlanner.tools, reasoning_effort: client.isLocal ? nil : "minimal", max_tokens: 1800,
+                    parallel_tool_calls: true, prompt_cache_key: "sirena-commands")
+    }
+
     /// Bounded agent loop: plan → execute → feed results and a fresh snapshot back → … (max `maxRounds`).
     /// `executeRound` runs one round's actions; returning `stop` ends the loop (confirmation pending, control action, handover).
-    public func run(command: String, snapshotText: String, maxRounds: Int = 3,
+    /// - Parameter firstResponse: the first round's reply already requested (speculatively, at the end of speech).
+    public func run(command: String, snapshotText: String, maxRounds: Int = 3, firstResponse: Task<ChatResponse, Error>? = nil,
                     executeRound: ([Action], Int) async throws -> RoundOutcome) async throws -> CommandPlan {
         guard let client = clientProvider() else { throw APIError.missingKey }
         var messages: [ChatMessage] = [.system(ModelCommandPlanner.systemPrompt),
@@ -149,7 +158,8 @@ public final class ModelCommandPlanner {
             let req = ChatRequest(model: modelName(), messages: messages, tools: ModelCommandPlanner.tools,
                                   reasoning_effort: client.isLocal ? nil : "minimal", max_tokens: 1800,
                                   parallel_tool_calls: true, prompt_cache_key: "sirena-commands")
-            let resp = try await client.chat(req)
+            let resp: ChatResponse
+            if round == 1, let first = firstResponse { resp = try await first.value } else { resp = try await client.chat(req) }
             plan.promptTokens! += resp.usage?.prompt_tokens ?? 0
             plan.completionTokens! += resp.usage?.completion_tokens ?? 0
             plan.reasoningTokens! += resp.usage?.completion_tokens_details?.reasoning_tokens ?? 0

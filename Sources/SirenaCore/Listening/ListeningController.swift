@@ -41,6 +41,12 @@ public final class ListeningController {
     private var followUpTimer: Timer?
     /// When each utterance being transcribed began (the recognizer's speech start, by turn).
     private var speechStarts: [Int: Date] = [:]
+    /// When the recognizer said each utterance ended, by turn (to measure the wait for the final text).
+    private var speechEnds: [Int: Date] = [:]
+    /// Latest partial transcript of the utterance in progress.
+    private var lastPartial = ""
+    /// Dictation inserts and edits still queued or running.
+    private var pendingDictationWork = 0
     private var idleTimer: Timer?
     private var keywordTimer: Timer?
     private var usingFallback = false
@@ -54,9 +60,11 @@ public final class ListeningController {
 
     private func enqueueDictation(_ work: @escaping () async -> Void) {
         let previous = dictationChain
+        pendingDictationWork += 1
         dictationChain = Task {
             await previous?.value
             await work()
+            await MainActor.run { [weak self] in self?.pendingDictationWork -= 1 }
         }
     }
 
@@ -459,11 +467,21 @@ public final class ListeningController {
             resetIdleTimer()
         case .partial(let text):
             if state == .awake { overlay.setPartial(text) }
-        case .speechEnd:
+            lastPartial = text
+        case .speechEnd(let turn):
             overlay.setSpeaking(false)
+            speechEnds = speechEnds.filter { Date().timeIntervalSince($0.value) < 60 }
+            speechEnds[turn] = Date()
+            prepareEarly(turn: turn)
         case .final(let text, let turn, let asr):
             overlay.setSpeaking(false)
             overlay.setPartial("")
+            lastPartial = ""
+            if let end = speechEnds.removeValue(forKey: turn) {
+                let tail = Int(Date().timeIntervalSince(end) * 1000)
+                SessionStats.shared.noteSpeechTail(endToTextMs: tail, recognizerMs: asr)
+                Log.speech.notice("final text \(tail) ms after the end of speech was detected (recognizer total \(asr ?? -1) ms)")
+            }
             let start = utteranceStart(text: text, asrMs: asr, recorded: speechStarts.removeValue(forKey: turn))
             route(text, asrMs: asr, spokeAt: start)
         case .error(let msg):
@@ -484,6 +502,27 @@ public final class ListeningController {
         }
     }
 
+    /// The recognizer detected the end of speech; the final text follows ~0.5–1 s later. Use that time: take the
+    /// screen snapshot and send the first model call (or the dictation cleanup) for the words heard so far.
+    /// Nothing acts on the Mac before the final transcript.
+    private func prepareEarly(turn: Int) {
+        let text = lastPartial.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard state == .awake, !text.isEmpty, pushToTalkKey == nil, !reader.isActive, !pipeline.isScreenAgentRunning,
+              !pipeline.hasPendingConfirmation else { return }
+        let start = speechStarts[turn] ?? Date()
+        let ctx = RouterContext(state: state, isDictating: isDictating, hasPendingConfirmation: false,
+                                inFollowUpWindow: inFollowUpWindow(spokeAt: start), numbersVisible: numbers.isVisible,
+                                inSoftWindow: inSoftWindow(spokeAt: start))
+        switch UtteranceRouter.route(text, context: ctx) {
+        case .command(let cmd) where pipeline.needsModel(cmd):
+            pipeline.prepare(command: cmd)
+        case .dictation(let raw) where pendingDictationWork == 0:
+            dictation.speculate(raw: raw, frontApp: RunningApps.frontmost())
+        default:
+            break
+        }
+    }
+
     private func route(_ text: String, asrMs: Int?, spokeAt: Date = Date(), forceDictation: Bool = false) {
         // Sirena hearing herself read: never act on it.
         if reader.recentlyActive, reader.isLikelyEcho(text) {
@@ -495,6 +534,10 @@ public final class ListeningController {
                                 isReading: reader.isActive, screenAgentBusy: pipeline.isScreenAgentRunning, inSoftWindow: inSoftWindow(spokeAt: spokeAt))
         let decision = forceDictation ? .dictation(text) : UtteranceRouter.route(text, context: ctx)
         Log.listening.info("utterance \"\(text, privacy: .public)\" → \(String(describing: decision), privacy: .public)")
+        switch decision {
+        case .command, .wakeWithCommand: break
+        default: pipeline.discardPrepared()   // a model call started at the end of speech is not needed
+        }
         if state == .awake { resetIdleTimer() }
         switch decision {
         case .wake:

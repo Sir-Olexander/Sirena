@@ -35,6 +35,72 @@ public final class CommandPipeline {
     /// The last command that ran without the model, for "again" / "more".
     private var lastRepeatable: (actions: [Action], label: String, at: Date)?
 
+    // MARK: Work done while the recognizer finishes the transcript
+
+    private let earlyLock = NSLock()
+    /// Element snapshot taken when the user stopped speaking (ready before the transcript arrives).
+    private var prewarmed: (snapshot: ScreenSnapshot, at: Date)?
+    /// First model call sent with the last partial transcript; used when the final transcript says the same.
+    private var speculation: (key: String, snapshot: ScreenSnapshot, task: Task<ChatResponse, Error>, at: Date)?
+
+    /// The user stopped speaking: take the screen snapshot now and, when the words so far can only be handled by
+    /// the model, send the first model call too. Nothing runs on the Mac until the final transcript arrives.
+    public func prepare(command: String?) {
+        let ctx = context
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let snap = ctx.snapshot(includeElements: true)
+            guard let self else { return }
+            self.earlyLock.lock()
+            self.prewarmed = (snap, Date())
+            self.earlyLock.unlock()
+            if let command { self.speculate(command, snapshot: snap) }
+        }
+    }
+
+    /// Whether a command would go to the model (not a control, saved shortcut, snippet, fast-path command or a cut-off).
+    public func needsModel(_ command: String) -> Bool {
+        let t = FastPathParser.normalize(command)
+        guard !t.isEmpty, FastPathParser.controlCommand(command, context: fastPathContext()) == nil, !isShortcutPhrase(command),
+              FastPathParser.parse(command, context: fastPathContext()) == nil, !CommandShape.isIncomplete(t) else { return false }
+        if t.firstMatch("^(?:insert|paste|put in|type|add|write)\\s+(.+)$").map({ notes.snippet(named: $0[1]) != nil }) == true { return false }
+        return true
+    }
+
+    private func speculate(_ command: String, snapshot: ScreenSnapshot) {
+        guard let client = planner.clientProvider() else { return }
+        let req = planner.firstRequest(command: command, snapshotText: snapshot.promptText(), client: client)
+        let task = Task { try await client.chat(req) }
+        earlyLock.lock()
+        speculation?.task.cancel()
+        speculation = (FastPathParser.normalize(command), snapshot, task, Date())
+        earlyLock.unlock()
+        Log.model.info("speculative plan for “\(command, privacy: .public)”")
+    }
+
+    /// The snapshot and in-flight first reply prepared for this command, if they still apply.
+    private func takePrepared(for command: String) -> (snapshot: ScreenSnapshot?, first: Task<ChatResponse, Error>?) {
+        earlyLock.lock(); defer { earlyLock.unlock() }
+        let key = FastPathParser.normalize(command)
+        var snap: ScreenSnapshot?
+        var first: Task<ChatResponse, Error>?
+        if let s = speculation {
+            if s.key == key, Date().timeIntervalSince(s.at) < 8 { snap = s.snapshot; first = s.task } else { s.task.cancel() }
+            speculation = nil
+        }
+        if snap == nil, let p = prewarmed, Date().timeIntervalSince(p.at) < 3 { snap = p.snapshot }
+        prewarmed = nil
+        return (snap, first)
+    }
+
+    /// The prepared work is not needed (the command ran without the model, or was not a command).
+    public func discardPrepared() {
+        earlyLock.lock()
+        speculation?.task.cancel()
+        speculation = nil
+        prewarmed = nil
+        earlyLock.unlock()
+    }
+
     public init(context: ScreenContext, executor: ActionExecutor, planner: ModelCommandPlanner, computerUse: ComputerUseAgent,
                 overlay: OverlayModel, history: HistoryLog, settings: Settings, shortcuts: ShortcutBook = .shared, notes: NotesStore = .shared) {
         self.context = context; self.executor = executor; self.planner = planner; self.computerUse = computerUse
@@ -100,6 +166,9 @@ public final class CommandPipeline {
         defer { isBusy = false; onCommandFinished?() }
         var latency = LatencyReport(asrMs: asrMs)
         let t0 = Date()
+
+        // Work prepared at the end of speech is only for commands that go to the model.
+        if fastPathOnly || !needsModel(text) { discardPrepared() }
 
         // Only filler words ("uh", "okay"): nothing to do.
         if FastPathParser.normalize(text).isEmpty {
@@ -331,9 +400,15 @@ public final class CommandPipeline {
     // MARK: - Model layer
 
     private func runModelLayer(_ text: String, latency: inout LatencyReport) async {
+        let modelStart = Date()
         latency.layer = settings.privateMode ? "glimmer" : "spark"
         overlay.showWorking("Thinking…", autoClear: 25)
-        let snapshot = await Task.detached(priority: .userInitiated) { [context] in context.snapshot(includeElements: true) }.value
+        let prepared = takePrepared(for: text)
+        let snapshot: ScreenSnapshot
+        if let s = prepared.snapshot { snapshot = s } else {
+            snapshot = await Task.detached(priority: .userInitiated) { [context] in context.snapshot(includeElements: true) }.value
+        }
+        if prepared.first != nil { Log.model.notice("using the speculative plan started at the end of speech") }
         // The snapshot whose text the model saw last: element ids in its tool calls refer to it.
         var currentSnapshot = snapshot
         var planMs = 0
@@ -347,7 +422,7 @@ public final class CommandPipeline {
         var actionsRun: [Action] = []
         var latencyCopy = latency
         do {
-            let plan = try await planner.run(command: text, snapshotText: snapshot.promptText()) { [self] proposed, round in
+            let plan = try await planner.run(command: text, snapshotText: snapshot.promptText(), firstResponse: prepared.first) { [self] proposed, round in
                 planMs += Int(Date().timeIntervalSince(roundStart) * 1000)
                 var actions = proposed
                 // Text edits never need a screenshot.
@@ -417,7 +492,9 @@ public final class CommandPipeline {
                 }
             }
             latency = latencyCopy
-            latency.planMs = planMs
+            // Understanding = all the time not spent acting (snapshot and every model round, including a final
+            // reply with no tool calls, which the per-round timer never saw).
+            latency.planMs = max(planMs, Int(Date().timeIntervalSince(modelStart) * 1000) - actMs)
             latency.actMs = actMs
             Log.model.info("plan: \(actionsRun.map { "\($0)" }.joined(separator: "; "), privacy: .public) tokens in=\(plan.promptTokens ?? 0) out=\(plan.completionTokens ?? 0)")
             if handedToScreen { return }

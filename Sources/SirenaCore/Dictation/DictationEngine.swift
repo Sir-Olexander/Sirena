@@ -75,9 +75,6 @@ public final class DictationEngine {
             let prefix = atLineStart(samePlace: samePlace) ? "" : "\n"
             toInsert = prefix + "\(n). " + body
         } else {
-            let listHint = listCounter > 0
-                ? "A numbered list is in progress (last item \(listCounter)). If this chunk is the next item, start it with \"\(listCounter + 1). \"."
-                : nil
             let (cleaned, ms, model) = await clean(trimmed, app: frontApp, hint: listHint, continuesSentence: continuesSentence)
             cleanupMs = ms; usedModel = model
             var text = cleaned
@@ -111,6 +108,41 @@ public final class DictationEngine {
         if !sessionText.isEmpty { return sessionText.hasSuffix("\n") }
         if let field = fieldText() { return field.isEmpty || field.hasSuffix("\n") }
         return true
+    }
+
+    /// Told to the model while a numbered list is in progress.
+    private var listHint: String? {
+        listCounter > 0 ? "A numbered list is in progress (last item \(listCounter)). If this chunk is the next item, start it with \"\(listCounter + 1). \"." : nil
+    }
+
+    // MARK: Speculative cleanup
+
+    private let specLock = NSLock()
+    private var speculation: (key: String, task: Task<String?, Never>)?
+
+    /// The user stopped speaking: send the cleanup of the words heard so far right away. When the final transcript
+    /// says the same (and nothing else was inserted meanwhile), its result is used instead of a new call.
+    public func speculate(raw: String, frontApp: AppInfo?) {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !skipCleanup(), let client = clientProvider(), !DictationEngine.isCleanChunk(trimmed),
+              frontApp?.pid == sessionAppPid || sessionAppPid == 0,
+              ListMarker.parse(trimmed, listActive: listCounter > 0, next: listCounter > 0 ? listCounter + 1 : nil) == nil else { return }
+        let (context, user) = cleanupPrompt(trimmed, app: frontApp, hint: listHint)
+        let key = context + "|" + WakeWord.normalize(trimmed)
+        let task = Task { await self.requestCleanup(user: user, client: client) }
+        specLock.lock()
+        speculation?.task.cancel()
+        speculation = (key, task)
+        specLock.unlock()
+    }
+
+    private func takeSpeculation(key: String) -> Task<String?, Never>? {
+        specLock.lock(); defer { specLock.unlock() }
+        guard let s = speculation else { return nil }
+        speculation = nil
+        if s.key == key { return s.task }
+        s.task.cancel()
+        return nil
     }
 
     /// Whether the next chunk continues a sentence of this session (no capital, no repeated words).
@@ -180,7 +212,8 @@ public final class DictationEngine {
     "ok see you at five" (chat app) → "ok see you at 5"
     """
 
-    func cleanup(_ raw: String, app: AppInfo?, client: MetaAPIClient, hint: String?) async -> String? {
+    /// The request text: (everything but the dictated words, the whole prompt).
+    func cleanupPrompt(_ raw: String, app: AppInfo?, hint: String?) -> (context: String, user: String) {
         let style: String
         let name = app?.name.lowercased() ?? ""
         if FastPathParser.chatApps.contains(where: { name.contains($0) }) { style = "chat app (casual, short)" }
@@ -191,7 +224,19 @@ public final class DictationEngine {
         let context = String(sessionText.suffix(240))
         if !context.isEmpty { user += "\nText already inserted before this chunk (context only, never repeat it): «\(context)»" }
         if let hint { user += "\n\(hint)" + (hint.hasPrefix("This chunk is the text of list item") ? " Start with a capital letter." : "") }
-        user += "\nDictated: \(raw)"
+        return (user, user + "\nDictated: \(raw)")
+    }
+
+    func cleanup(_ raw: String, app: AppInfo?, client: MetaAPIClient, hint: String?) async -> String? {
+        let (context, user) = cleanupPrompt(raw, app: app, hint: hint)
+        if let early = takeSpeculation(key: context + "|" + WakeWord.normalize(raw)) {
+            Log.model.notice("dictation: using the cleanup started at the end of speech")
+            return await early.value
+        }
+        return await requestCleanup(user: user, client: client)
+    }
+
+    private func requestCleanup(user: String, client: MetaAPIClient) async -> String? {
         let req = ChatRequest(model: modelName(), messages: [.system(DictationEngine.systemPrompt), .user(user)],
                               reasoning_effort: client.isLocal ? nil : "minimal", max_tokens: 1200, prompt_cache_key: "sirena-dictation")
         do {
