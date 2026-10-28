@@ -50,9 +50,7 @@ public final class CommandPipeline {
         Task.detached(priority: .userInitiated) { [weak self] in
             let snap = ctx.snapshot(includeElements: true)
             guard let self else { return }
-            self.earlyLock.lock()
-            self.prewarmed = (snap, Date())
-            self.earlyLock.unlock()
+            self.earlyLock.withLock { self.prewarmed = (snap, Date()) }
             if let command { self.speculate(command, snapshot: snap) }
         }
     }
