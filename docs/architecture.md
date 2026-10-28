@@ -57,7 +57,15 @@ footer, share bar or recommendation), or all visible text.
 * `UtteranceRouter` classifies each final transcript using the state, dictation mode, pending confirmation,
   follow-up window, numbers mode and push-to-talk key. The name is only recognized at the start of an
   utterance, with a list of misrecognitions ("Serena", "siren a", …).
-* The follow-up window (6 s, 15 s while numbers are visible) is restarted by every command.
+* The follow-up window (8 s, 12 s after a wake, 15 s while numbers are visible) is restarted by every command and
+  stays open while one runs. It is checked against the recognizer's speech start of the utterance, not the
+  arrival of its transcript. Until 20 s after the last command a quiet stretch lets safe fast-path commands
+  (`FastPathParser.isSafeWithoutName`) run without the name, through the fast path only.
+* `CommandShape` classifies name-less speech as command, filler, incomplete, question or chatter; only commands
+  reach the pipeline. A control next to the name anywhere in the utterance ("wait Sirena") counts as named.
+* When the recognizer reports the end of speech, `ListeningController.prepareEarly` takes the element snapshot and,
+  for words only the model can handle, sends the first model call (or the dictation cleanup) with the last partial
+  transcript; the result is used only if the final transcript matches. Nothing acts before the final transcript.
 
 ## Command pipeline
 

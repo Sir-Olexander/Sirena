@@ -29,14 +29,21 @@ mic ──► Muse Voice Transcribe (ENDPOINTING) ──► utterance router ─
 * **Private waiting.** While waiting, "Hey Sirena" is detected with Apple's on-device speech recognition and
   the stream to Meta is paused: no audio leaves the Mac until she is awake (lock icon in the pill). Falls back
   to streaming if on-device recognition is unavailable; can be turned off in the menu.
-* **The "Sirena" rule.** A command only runs when the utterance starts with "Sirena" (or a close
-  misrecognition such as "Serena"). For 6 seconds after a command the next one works without the name;
-  the overlay shows a countdown ring. Background speech like "switch to Slack" does nothing.
+* **The "Sirena" rule.** A command runs when the utterance starts with "Sirena" (or a close misrecognition
+  such as "Serena"), or has a short command right next to the name ("wait Sirena", "Para, para Sirena, para").
+  For 8 seconds after a command (12 after "Hey Sirena"), counted from when you start speaking, the next one
+  works without the name; the overlay shows a countdown ring. Until 20 seconds after the last command,
+  navigation the fast path understands (scroll, tabs, apps, "first link") still works without the name.
+  Without the name, only speech that looks like a command runs: fillers ("okay", "uh"), questions, cut-off
+  commands ("switch to") and room chatter never reach the model. "again" / "more" repeat the last command.
+  Portuguese controls work too (para, espera, cancela, sim, não).
 * **Dictation.** "Sirena, type …" inserts just that text. "Sirena, start dictating" types everything you say
   (cleaned up by Muse Spark: filler words, false starts, punctuation, lists, tone adapted to the app) until
   "Sirena, stop". "Sirena, delete that", "Sirena, new line", "Sirena, undo" work while dictating.
 * **Confirmations.** Anything irreversible (sending a message, deleting, closing unsaved work) shows
-  "Send this message? Yes / Cancel" and waits for "yes" or "cancel" (Enter and Esc also work).
+  "Send “see you at 5” in WhatsApp? Yes / Cancel" and waits for "yes" or "cancel" (Enter and Esc also work).
+  A "yes" always does something: a question with no action behind it is never shown. "Sirena, send" sends what
+  is in the message box after that question.
 * **Numbers mode.** "Sirena, show numbers" puts a badge on every clickable element of the front window
   (from the Accessibility tree), then "click 7".
 * **Live vocabulary.** The recognizer gets the names of running apps, window titles, browser tab titles
@@ -83,7 +90,12 @@ mic ──► Muse Voice Transcribe (ENDPOINTING) ──► utterance router ─
 
 While the screenshot fallback works, other speech does not interrupt it: only "cancel", "stop" or the answer to its
 confirmation. Its confirmations name the item it will act on ("Click “Mark” (the first item in the “Chats” list) in
-WhatsApp?"), never a window or page title.
+WhatsApp?"), never a window or page title. It runs at most 6 steps and 30 seconds, only for requests that say what to
+do ("this one" or "more" are not enough), asks nothing for harmless steps, and says so when it could not act.
+
+Results pages: "first link", "the second one", "open the third result" open that result of the page in front
+without the model (navigation, ads and "skip to content" links are left out). "Close all tabs" always closes every
+tab of the window you see and leaves one empty tab.
 
 ## Requirements
 
@@ -130,6 +142,10 @@ Diagnostics that run inside the signed app, with its permissions:
 open -n build/Sirena.app --args --selftest-wake hey_sirena.wav /tmp/wake.txt   # on-device wake word
 open -n build/Sirena.app --args --selftest audio /tmp/audio.txt                 # voice-processing microphone
 open -n build/Sirena.app --args --selftest context /tmp/context.txt             # snapshot, screens, article text
+open -n build/Sirena.app --args --selftest tabs /tmp/tabs.txt                   # tab commands on a temporary Chrome window
+open -n build/Sirena.app --args --selftest results /tmp/results.txt             # "first / second result" on a temporary Google page
+open -n build/Sirena.app --args --selftest dictation /tmp/dictation.txt         # cleanup and lists with the real model, dry run
+open -n build/Sirena.app --args --selftest speculation /tmp/speculation.txt     # model commands with and without the early start
 ```
 
 Set `SIRENA_DEBUG_DUMP=/some/dir` to write every model request and response body there.
