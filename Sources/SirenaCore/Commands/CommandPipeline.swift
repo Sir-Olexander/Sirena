@@ -334,6 +334,8 @@ public final class CommandPipeline {
         latency.layer = settings.privateMode ? "glimmer" : "spark"
         overlay.showWorking("Thinking…", autoClear: 25)
         let snapshot = await Task.detached(priority: .userInitiated) { [context] in context.snapshot(includeElements: true) }.value
+        // The snapshot whose text the model saw last: element ids in its tool calls refer to it.
+        var currentSnapshot = snapshot
         var planMs = 0
         var actMs = 0
         var roundStart = Date()
@@ -380,7 +382,7 @@ public final class CommandPipeline {
                 overlay.showWorking(actions.first?.shortDescription ?? "Working", autoClear: 4)
                 let ta = Date()
                 do {
-                    let res = try await executor.execute(actions, snapshot: round == 1 ? snapshot : nil)
+                    let res = try await executor.execute(actions, snapshot: currentSnapshot)
                     actMs += Int(Date().timeIntervalSince(ta) * 1000)
                     lastFailure = nil
                     if let p = res.pendingConfirmation {
@@ -400,16 +402,18 @@ public final class CommandPipeline {
                     }
                     if unverifiable { return .init(summary: res.summary, stop: true, newSnapshotText: nil) }
                     context.invalidateBrowserCache()
-                    let fresh = await Task.detached(priority: .userInitiated) { [context] in context.snapshot(includeElements: true, maxElements: 100).promptText() }.value
+                    let fresh = await Task.detached(priority: .userInitiated) { [context] in context.snapshot(includeElements: true, maxElements: 100) }.value
+                    currentSnapshot = fresh
                     roundStart = Date()
-                    return .init(summary: res.summary, stop: false, newSnapshotText: fresh)
+                    return .init(summary: res.summary, stop: false, newSnapshotText: fresh.promptText())
                 } catch let e as ExecutionError {
                     actMs += Int(Date().timeIntervalSince(ta) * 1000)
                     lastFailure = e.localizedDescription
                     context.invalidateBrowserCache()
-                    let fresh = await Task.detached(priority: .userInitiated) { [context] in context.snapshot(includeElements: true, maxElements: 100).promptText() }.value
+                    let fresh = await Task.detached(priority: .userInitiated) { [context] in context.snapshot(includeElements: true, maxElements: 100) }.value
+                    currentSnapshot = fresh
                     roundStart = Date()
-                    return .init(summary: "Failed: \(e.localizedDescription). Try another way, or call need_screen.", stop: false, newSnapshotText: fresh)
+                    return .init(summary: "Failed: \(e.localizedDescription). Try another way, or call need_screen.", stop: false, newSnapshotText: fresh.promptText())
                 }
             }
             latency = latencyCopy

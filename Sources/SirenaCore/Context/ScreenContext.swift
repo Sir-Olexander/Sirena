@@ -29,9 +29,9 @@ public struct ScreenSnapshot {
         if let f = focusedDescription { lines.append("Focused element: \(f)") }
         if let sc = screensLine { lines.append(sc) }
         if !elements.isEmpty {
-            lines.append("Interactive elements in the front window (id kind \"label\"):")
+            lines.append("Interactive elements in the front window (id kind \"label\" [state]):")
             for e in elements.prefix(maxElements) {
-                lines.append("  \(e.id) \(e.kind) \"\(e.name)\"" + (e.isFocused ? " (focused)" : ""))
+                lines.append("  \(e.id) \(e.kind) \"\(e.name)\"" + (e.state.map { " [\($0)]" } ?? "") + (e.isFocused ? " (focused)" : ""))
             }
         }
         return lines.joined(separator: "\n")

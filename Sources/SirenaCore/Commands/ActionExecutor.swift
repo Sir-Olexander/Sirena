@@ -271,6 +271,22 @@ public final class ActionExecutor {
             return "Clicked \(n) (\(el.name.prefix(30)))"
         case .focusElement(let label):
             return try focus(label: label, snapshot: &snap)
+        case .clickId(let id, let label), .focusId(let id, let label):
+            var isClick = false
+            if case .clickId = action { isClick = true }
+            // The id is only meaningful in the snapshot the model saw; without it, fall back to the label.
+            guard let el = snap.elements.first(where: { $0.id == id }) else {
+                if let l = label, !l.isEmpty { return isClick ? try click(label: l, snapshot: &snap) : try focus(label: l, snapshot: &snap) }
+                throw ExecutionError.elementNotFound("element \(id)")
+            }
+            if isClick {
+                AX.click(el)
+                undoStack.append(.generic)
+                let name = el.name.isEmpty ? "\(el.kind) \(id)" : "“\(el.name.prefix(30))”"
+                return "Clicked \(name)" + (el.state.map { $0 == "on" ? " (was on)" : ($0 == "off" ? " (was off)" : "") } ?? "")
+            }
+            AX.focus(el)
+            return "Focused “\(el.name.prefix(30))”"
         case .focusComposer:
             return focusComposer(snapshot: &snap)
         case .typeText(let text):

@@ -24,7 +24,8 @@ public final class ModelCommandPlanner {
     Respond with tool calls that carry out the command directly; several tool calls in order are fine. Act, do not ask questions.
 
     Guidelines:
-    - Prefer the cheapest direct action: activate_app for app switching, switch_tab for browser tabs, press_keys for shortcuts, click_element / focus_element with the exact label from the element list.
+    - Prefer the cheapest direct action: activate_app for app switching, switch_tab for browser tabs, press_keys for shortcuts, click_element / focus_element with the element's id and exact label from the element list.
+    - Element ids are only valid for the snapshot they came from. Always pass the id when several elements share a label or the label is empty. Switches and checkboxes show [on] or [off]: to turn one on, click it only when it is [off] (and the reverse).
     - "open X": use open (an exact app name opens the app; a website name such as Google, YouTube or Gmail opens the site in the browser in front).
     - Requests to change the wording or formatting of text the user dictated, selected, or that is in the focused editable field ("make that a list", "separate the points with two line breaks", "fix the grammar") → edit_text with the instruction. Never use need_screen for text edits.
     - To copy, select or read a piece of the text on screen (a paragraph, a sentence, the title, the last message) use copy_text. Never use edit_text to copy, select or read.
@@ -53,12 +54,12 @@ public final class ModelCommandPlanner {
                     "what": ["type": "string", "enum": ["paragraph", "sentence", "title", "last_message", "this_paragraph"]],
                     "index": ["type": "integer", "description": "1-based; -1 for the last"],
                     "about": ["type": "string"], "starts_with": ["type": "string"]], "required": ["action", "what"]]),
-        ChatTool(name: "focus_element", description: "Put the keyboard focus into a text field or element with this label.",
-                 parameters: ["type": "object", "properties": ["label": ["type": "string"]], "required": ["label"]]),
+        ChatTool(name: "focus_element", description: "Put the keyboard focus into a text field or element: its id from the element list and its label.",
+                 parameters: ["type": "object", "properties": ["id": ["type": "integer", "description": "id from the element list"], "label": ["type": "string"]], "required": []]),
         ChatTool(name: "focus_composer", description: "Focus the main message box / chat input of the front window.",
                  parameters: ["type": "object", "properties": [:], "required": []]),
-        ChatTool(name: "click_element", description: "Click a button, link, menu item or control by its label.",
-                 parameters: ["type": "object", "properties": ["label": ["type": "string"]], "required": ["label"]]),
+        ChatTool(name: "click_element", description: "Click a button, link, switch, menu item or control: its id from the element list and its label.",
+                 parameters: ["type": "object", "properties": ["id": ["type": "integer", "description": "id from the element list"], "label": ["type": "string"]], "required": []]),
         ChatTool(name: "type_text", description: "Type text at the current cursor position.",
                  parameters: ["type": "object", "properties": ["text": ["type": "string"]], "required": ["text"]]),
         ChatTool(name: "scroll", description: "Scroll the front window.",
@@ -223,13 +224,18 @@ public final class ModelCommandPlanner {
             default: return [.copyText(q)]
             }
         case "focus_element":
-            guard let l = s("label"), !l.isEmpty else { return [.focusComposer] }
+            let label = s("label").flatMap { $0.isEmpty ? nil : $0 }
+            if let id = elementId(args) { return [.focusId(id, label: label.flatMap { Int($0) == nil ? $0 : nil })] }
+            guard let l = label else { return [.focusComposer] }
             return [.focusElement(l)]
         case "focus_composer":
             return [.focusComposer]
         case "click_element":
-            guard let l = s("label"), !l.isEmpty else { return [] }
-            if let n = Int(l) { return [.clickNumber(n)] }
+            let label = s("label").flatMap { $0.isEmpty ? nil : $0 }
+            // An id (or a label that is only a number: the model quoting the id) refers to the element list it saw,
+            // never to the "show numbers" badges.
+            if let id = elementId(args) { return [.clickId(id, label: label.flatMap { Int($0) == nil ? $0 : nil })] }
+            guard let l = label else { return [] }
             return [.clickElement(l)]
         case "type_text":
             guard let t = s("text"), !t.isEmpty else { return [] }
@@ -280,6 +286,14 @@ public final class ModelCommandPlanner {
         default:
             return []
         }
+    }
+
+    /// The element id of a click / focus call: `id`, or a `label` that is only a number.
+    static func elementId(_ args: JSON) -> Int? {
+        if let i = args["id"]?.intValue { return i }
+        if let s = args["id"]?.stringValue, let i = Int(s.trimmingCharacters(in: .whitespaces)) { return i }
+        if let l = args["label"]?.stringValue, let i = Int(l.trimmingCharacters(in: .whitespaces)) { return i }
+        return nil
     }
 
     static func screenTarget(_ raw: String) -> ScreenTarget {

@@ -131,6 +131,8 @@ public struct UIElementInfo: Equatable {
     public let frame: CGRect
     public let isFocused: Bool
     public let isEnabled: Bool
+    /// "on" / "off" for switches and checkboxes, "selected" for the selected tab or option.
+    public var state: String? = nil
 
     public var kind: String {
         switch role {
@@ -203,12 +205,19 @@ public enum AX {
             var isInteractive = interactiveRoles.contains(role) || (pressable && ["AXGroup", "AXImage", "AXStaticText", "AXCell", "AXRow", "AXHeading"].contains(role))
             if role == "AXStaticText", !pressable { isInteractive = false }
             if isInteractive, visible, let f = frame, el.isEnabled || true {
-                let name = el.label
+                let isToggle = toggleRoles.contains(role) || ["AXSwitch", "AXToggle"].contains(el.subrole ?? "")
+                var name = el.label
+                // Switches and checkboxes often have no label of their own: use the text that titles them.
+                if name.isEmpty, isToggle || role == "AXPopUpButton" || role == "AXSlider", let titleEl = el.element("AXTitleUIElement") {
+                    name = titleEl.label
+                }
                 let dup = seenFrames.contains { $0.equalTo(f) }
-                if !dup, (!name.isEmpty || el.isTextInputRole) {
+                if !dup, (!name.isEmpty || el.isTextInputRole || isToggle) {
                     seenFrames.append(f)
-                    result.append(UIElementInfo(id: nextId, element: el, role: role, subrole: el.subrole, name: String(name.prefix(80)),
-                                                frame: f, isFocused: el.isFocused, isEnabled: el.isEnabled))
+                    var info = UIElementInfo(id: nextId, element: el, role: role, subrole: el.subrole, name: String(name.prefix(80)),
+                                             frame: f, isFocused: el.isFocused, isEnabled: el.isEnabled)
+                    info.state = AX.state(of: el, role: role, isToggle: isToggle)
+                    result.append(info)
                     nextId += 1
                 }
             }
@@ -219,6 +228,16 @@ public enum AX {
             }
         }
         return result
+    }
+
+    static let toggleRoles: Set<String> = ["AXCheckBox", "AXSwitch", "AXToggle"]
+
+    /// "on" / "off" for switches and checkboxes, "selected" for a selected tab or radio button.
+    static func state(of el: AXElement, role: String, isToggle: Bool) -> String? {
+        let value = (el.attribute(kAXValueAttribute) as? NSNumber)?.intValue
+        if isToggle { return value.map { $0 == 0 ? "off" : "on" } }
+        if role == "AXRadioButton" || role == "AXTab" { return value == 1 || el.bool(kAXSelectedAttribute) == true ? "selected" : nil }
+        return nil
     }
 
     /// Finds the first element whose label matches `query` (fuzzy).

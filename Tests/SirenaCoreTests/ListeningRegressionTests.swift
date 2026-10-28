@@ -1,4 +1,5 @@
 import XCTest
+import ApplicationServices
 @testable import SirenaCore
 
 /// Utterances from real sessions (2026-10-27/28 history), with the route each one should take now.
@@ -181,5 +182,31 @@ final class ConfirmationTests: XCTestCase {
                        "Send the message in WhatsApp?")
         XCTAssertEqual(ConfirmationText.question("Send this message to CASA?", before: [], after: [.pressReturnToSend], appName: "WhatsApp"),
                        "Send this message to CASA?")
+    }
+}
+
+/// The model refers to elements by their id in the screen list (2026-10-28: all three Bluetooth attempts failed
+/// because ids became "show numbers" clicks).
+final class ElementIdTests: XCTestCase {
+    func testClickAndFocusByIdNeverMeanNumberBadges() {
+        func args(_ d: [String: JSON]) -> JSON { .object(d) }
+        XCTAssertEqual(ModelCommandPlanner.actions(for: "click_element", args: args(["id": 8, "label": "Bluetooth"])), [.clickId(8, label: "Bluetooth")])
+        XCTAssertEqual(ModelCommandPlanner.actions(for: "click_element", args: args(["label": "0"])), [.clickId(0, label: nil)])
+        XCTAssertEqual(ModelCommandPlanner.actions(for: "click_element", args: args(["label": "Send"])), [.clickElement("Send")])
+        XCTAssertEqual(ModelCommandPlanner.actions(for: "focus_element", args: args(["label": "0"])), [.focusId(0, label: nil)])
+        XCTAssertEqual(ModelCommandPlanner.actions(for: "focus_element", args: args(["id": "3", "label": "Pesquisa"])), [.focusId(3, label: "Pesquisa")])
+        XCTAssertEqual(ModelCommandPlanner.actions(for: "focus_element", args: args([:])), [.focusComposer])
+    }
+
+    func testSwitchStatesAreInTheSnapshotText() {
+        let ax = AXElement(AXUIElementCreateSystemWide())
+        var toggle = UIElementInfo(id: 8, element: ax, role: "AXCheckBox", subrole: "AXSwitch", name: "Bluetooth", frame: .zero, isFocused: false, isEnabled: true)
+        toggle.state = "off"
+        let row = UIElementInfo(id: 3, element: ax, role: "AXRow", subrole: nil, name: "Bluetooth", frame: .zero, isFocused: false, isEnabled: true)
+        var snap = ScreenSnapshot()
+        snap.elements = [row, toggle]
+        let text = snap.promptText()
+        XCTAssertTrue(text.contains("  8 switch \"Bluetooth\" [off]"), text)
+        XCTAssertTrue(text.contains("  3 row \"Bluetooth\"\n") || text.hasSuffix("  3 row \"Bluetooth\""), text)
     }
 }

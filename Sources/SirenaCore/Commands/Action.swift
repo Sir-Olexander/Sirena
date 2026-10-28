@@ -58,6 +58,9 @@ public indirect enum Action: Equatable, Codable {
     case clickElement(String)
     case clickNumber(Int)
     case focusElement(String)
+    /// An element of the screen snapshot the model saw, by its id there (label as a fallback).
+    case clickId(Int, label: String?)
+    case focusId(Int, label: String?)
     /// Focus the message composer / main text input of the front window.
     case focusComposer
     case typeText(String)
@@ -159,6 +162,8 @@ public indirect enum Action: Equatable, Codable {
         case .scrollTo(let top): return top ? "Scrolling to top" : "Scrolling to bottom"
         case .clickElement(let s): return "Clicking “\(s)”"
         case .clickNumber(let n): return "Clicking \(n)"
+        case .clickId(let n, let l): return l.map { "Clicking “\($0)”" } ?? "Clicking element \(n)"
+        case .focusId(let n, let l): return l.map { "Focusing “\($0)”" } ?? "Focusing element \(n)"
         case .focusElement(let s): return "Focusing “\(s)”"
         case .focusComposer: return "Focusing the message box"
         case .typeText(let t): return "Typing “\(t.prefix(40))\(t.count > 40 ? "…" : "")”"
