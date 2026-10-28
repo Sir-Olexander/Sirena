@@ -31,7 +31,7 @@ public final class ModelCommandPlanner {
     - read_aloud reads the selection, the article or the page. save_note saves a note without leaving the app. choose_menu_item picks a menu bar item by path.
     - "Windows" phrasing maps to the Mac equivalent (Alt+Tab → cmd+tab, Ctrl+C → cmd+c, Alt+F4 → cmd+q, F5 → cmd+r).
     - To send a message or chat prompt: activate_app if needed, focus_element on the composer (or focus_composer), type_text with the message, then confirm("Send this message?") and finally press_keys("return"). Never press Enter to send, delete, submit a purchase or close unsaved work without a confirm step right before it.
-    - Use scroll for scrolling, open_url for websites, web_search for searches.
+    - Use scroll for scrolling, open_url for websites, web_search for searches, close_tabs to close several tabs at once.
     - If the request needs visual understanding that the element list cannot give (the element is not listed, positions matter, images, canvas apps), call need_screen with a concise goal so the screenshot fallback can take over. Only do this when direct tools cannot work.
     - If the user is not asking for an action (a question, a comment), reply in one short sentence instead of calling tools.
     - Keep tool arguments minimal and exact. Labels must be copied from the element list when they exist.
@@ -75,6 +75,8 @@ public final class ModelCommandPlanner {
                  parameters: ["type": "object", "properties": ["text": ["type": "string"]], "required": ["text"]]),
         ChatTool(name: "choose_menu_item", description: "Choose a menu bar item of the front app by path, e.g. 'File > New Note'.",
                  parameters: ["type": "object", "properties": ["path": ["type": "string"]], "required": ["path"]]),
+        ChatTool(name: "close_tabs", description: "Close several browser tabs of the front window at once: the tabs to the right or left of the active tab, all other tabs, or all tabs except one (keep = tab number).",
+                 parameters: ["type": "object", "properties": ["which": ["type": "string", "enum": ["right", "left", "others", "all_except"]], "keep": ["type": "integer"]], "required": ["which"]]),
         ChatTool(name: "need_screen", description: "Hand over to the screenshot-based fallback with a concise goal, when the element list is not enough.",
                  parameters: ["type": "object", "properties": ["goal": ["type": "string"]], "required": ["goal"]]),
     ]
@@ -169,7 +171,7 @@ public final class ModelCommandPlanner {
                 if isLast {
                     content = "Result: \(outcome.summary.isEmpty ? "done" : outcome.summary)"
                     if let snap = outcome.newSnapshotText { content += "\n\nScreen snapshot now:\n\(snap)" }
-                    content += "\n\nEvery action above that did not report a failure has been carried out, even when the snapshot cannot show it (scrolling, key presses, typed text): never repeat it. If the spoken command is now fully carried out, answer in a few words with no tool calls. Otherwise continue with only the remaining steps."
+                    content += "\n\nEvery action above that did not report a failure has been carried out. Do not repeat a step whose effect you cannot see in the snapshot (scrolling, typed text, a key press with no visible result). When the snapshot shows work is left (for example tabs that should be closed are still in the tab list), keep going, even if that means pressing the same key again. If the spoken command is fully carried out, answer in a few words with no tool calls."
                 }
                 messages.append(.tool(id: call.id, content: content))
             }
@@ -216,6 +218,15 @@ public final class ModelCommandPlanner {
             return [.confirmThen(message: s("message") ?? "Do it?", actions: [])]
         case "need_screen":
             return [.computerUse(goal: s("goal") ?? "")]
+        case "close_tabs":
+            switch s("which") ?? "" {
+            case "right": return [.closeTabs(.right)]
+            case "left": return [.closeTabs(.left)]
+            case "all_except":
+                if let k = args["keep"]?.intValue, k > 0 { return [.closeTabs(.allExcept(.index(k)))] }
+                return [.closeTabs(.others)]
+            default: return [.closeTabs(.others)]
+            }
         case "open":
             guard let n = s("name"), !n.isEmpty else { return [] }
             return [.open(n)]

@@ -13,6 +13,14 @@ public enum SelfTests {
         case "vpdebug": return vpDebug()
         case "mics": return mics()
         case "fallback": return await fallback()
+        case "tabs": return await tabsTest()
+        case "reopen":
+            guard let chrome = RunningApps.list().first(where: { $0.bundleId == "com.google.Chrome" }) else { return "Chrome is not running" }
+            let before = AXElement.application(pid: chrome.pid).windows.map { $0.title ?? "?" }
+            let r = try? await ActionExecutor(context: ScreenContext(), numbers: NumbersMode(), inserter: .shared).execute([.open("Google Chrome")], snapshot: nil)
+            usleep(800_000)
+            let after = AXElement.application(pid: chrome.pid).windows.map { "\($0.title ?? "?") [\($0.subrole ?? "")]" }
+            return "windows before: \(before)\nopen Google Chrome → \(r?.summary ?? "error")\nwindows after: \(after)"
         default: return "unknown self-test \(name)"
         }
     }
@@ -48,6 +56,56 @@ public enum SelfTests {
                 lines.append("requested voice processing=\(vp): start failed: \(error.localizedDescription)")
             }
         }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Real Chrome: "open Google Chrome" with no windows opens one; tab sets close exactly the right tabs.
+    /// Works in its own temporary window of blank tabs, closed at the end, so the user's tabs are never touched.
+    static func tabsTest() async -> String {
+        guard let chrome = RunningApps.list().first(where: { $0.bundleId == "com.google.Chrome" }) else { return "Chrome is not running" }
+        var lines: [String] = []
+        let ax = AXElement.application(pid: chrome.pid)
+        let before = ax.windows.count
+        lines.append("Chrome windows before: \(before)")
+        let executor = ActionExecutor(context: ScreenContext(), numbers: NumbersMode(), inserter: .shared)
+        if before == 0 {
+            let r = try? await executor.execute([.open("Google Chrome")], snapshot: nil)
+            lines.append("open Google Chrome → \(r?.summary ?? "error"); windows now: \(ax.windows.count)")
+        }
+        func script(_ s: String) -> String? { BrowserControl.run(s, timeout: 5) }
+        func tabCount() -> Int { BrowserControl.info(for: chrome)?.tabs.count ?? -1 }
+        guard let wid = script("""
+            tell application "Google Chrome"
+                set w to make new window
+                set URL of active tab of w to "about:blank#1"
+                repeat with k from 2 to 6
+                    make new tab at end of tabs of w with properties {URL:"about:blank#" & k}
+                end repeat
+                set active tab index of w to 2
+                return (id of w) as text
+            end tell
+            """) else { return (lines + ["could not create the test window (Automation permission?)"]).joined(separator: "\n") }
+        usleep(400_000)
+        lines.append("test window: \(tabCount()) tabs, active 2")
+        let right = try? await executor.execute([.closeTabs(.right)], snapshot: nil)
+        lines.append("close tabs to the right → \(right?.summary ?? "error"); tabs left: \(tabCount()) (expect 2)")
+        _ = script("""
+            tell application "Google Chrome"
+                set w to window id \(wid)
+                repeat with k from 3 to 5
+                    make new tab at end of tabs of w with properties {URL:"about:blank#" & k}
+                end repeat
+                set active tab index of w to 3
+            end tell
+            """)
+        usleep(300_000)
+        let left = try? await executor.execute([.closeTabs(.left)], snapshot: nil)
+        lines.append("close tabs to the left (5 tabs, active 3) → \(left?.summary ?? "error"); tabs left: \(tabCount()) (expect 3)")
+        let others = try? await executor.execute([.closeTabs(.allExcept(.last))], snapshot: nil)
+        let info = BrowserControl.info(for: chrome)
+        lines.append("close all tabs but the last one → \(others?.summary ?? "error"); tabs left: \(info?.tabs.count ?? -1) (expect 1), active \(info?.activeIndex ?? -1)")
+        _ = script("tell application \"Google Chrome\" to close window id \(wid)")
+        lines.append("test window closed; Chrome windows now: \(ax.windows.count)")
         return lines.joined(separator: "\n")
     }
 

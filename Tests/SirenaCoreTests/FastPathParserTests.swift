@@ -108,6 +108,22 @@ final class FastPathParserTests: XCTestCase {
         XCTAssertNil(parse("switch to Chrome go to the first tab"))
     }
 
+    func testCloseTabSets() {
+        XCTAssertEqual(parse("Close all tabs to the right"), [.closeTabs(.right)])
+        XCTAssertEqual(parse("close the tabs to the right of this one"), [.closeTabs(.right)])
+        XCTAssertEqual(parse("close tabs to the left"), [.closeTabs(.left)])
+        XCTAssertEqual(parse("close all tabs to the left"), [.closeTabs(.left)])
+        XCTAssertEqual(parse("close the other tabs"), [.closeTabs(.others)])
+        XCTAssertEqual(parse("close all tabs but this one"), [.closeTabs(.others)])
+        XCTAssertEqual(parse("close all tabs except the current tab"), [.closeTabs(.others)])
+        XCTAssertEqual(parse("close all tabs but the first one"), [.closeTabs(.allExcept(.first))])
+        XCTAssertEqual(parse("close all tabs except tab 3"), [.closeTabs(.allExcept(.index(3)))])
+        XCTAssertEqual(parse("close all tabs except the last one"), [.closeTabs(.allExcept(.last))])
+        XCTAssertEqual(parse("close tab"), [.closeTab])
+        XCTAssertEqual(parse("close this tab"), [.closeTab])
+        XCTAssertNotEqual(parse("close the other tab")?.first, .switchTo("close the other"))
+    }
+
     func testScreens() {
         XCTAssertEqual(parse("move this window to the other screen"), [.moveWindowToScreen(.other)])
         XCTAssertEqual(parse("move it to the left monitor"), [.moveWindowToScreen(.left)])

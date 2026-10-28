@@ -153,6 +153,40 @@ public enum RunningApps {
         return ok
     }
 
+    /// Makes sure an activated app shows a window, the way clicking its Dock icon does:
+    /// all windows minimized → restore one; no windows at all → send the "reopen" request (apps such as Chrome
+    /// then open a new window). Returns true when a new window was requested.
+    @discardableResult
+    public static func ensureWindow(_ info: AppInfo) -> Bool {
+        let windowsOnScreenBefore = CGWindowCounter.standardWindowCount(pid: info.pid)
+        let ax = AXElement.application(pid: info.pid)
+        let windows = ax.windows.filter { ($0.subrole ?? "AXStandardWindow") != "AXSystemDialog" }
+        if !windows.isEmpty {
+            if windows.allSatisfy({ $0.bool(kAXMinimizedAttribute) == true }), let w = windows.first {
+                w.set(kAXMinimizedAttribute, kCFBooleanFalse)
+                w.perform(kAXRaiseAction)
+            }
+            return false
+        }
+        guard let url = info.app.bundleURL else { return false }
+        // Opening an app that is already running makes Launch Services send it the reopen Apple event,
+        // exactly like a Dock click.
+        let cfg = NSWorkspace.OpenConfiguration()
+        cfg.activates = true
+        cfg.createsNewApplicationInstance = false
+        let sem = DispatchSemaphore(value: 0)
+        NSWorkspace.shared.openApplication(at: url, configuration: cfg) { _, _ in sem.signal() }
+        _ = sem.wait(timeout: .now() + 1.5)
+        // Wait briefly for the window so the next step (typing, tabs) has somewhere to go.
+        // (Accessibility can list no windows for a background app whose window is on another Space; the reopen
+        // then just brings that window forward, like a Dock click, so only report a window that really appeared.)
+        for _ in 0..<15 {
+            if ax.windows.contains(where: { $0.subrole == "AXStandardWindow" }) { break }
+            usleep(100_000)
+        }
+        return ax.windows.contains { $0.subrole == "AXStandardWindow" } && CGWindowCounter.standardWindowCount(pid: info.pid) > windowsOnScreenBefore
+    }
+
     /// Raises a specific window by title, activating its app.
     @discardableResult
     public static func raiseWindow(title: String, in info: AppInfo) -> Bool {
@@ -187,5 +221,19 @@ extension String {
         }
         parts.append(ns.substring(from: last))
         return parts.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+}
+
+
+/// Counts an app's normal windows from the window server (works across Spaces, unlike Accessibility).
+enum CGWindowCounter {
+    static func standardWindowCount(pid: pid_t) -> Int {
+        let list = (CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
+        return list.filter { w in
+            guard (w[kCGWindowOwnerPID as String] as? pid_t) == pid, (w[kCGWindowLayer as String] as? Int) == 0,
+                  let b = w[kCGWindowBounds as String] as? [String: CGFloat], let width = b["Width"], let height = b["Height"] else { return false }
+            // Real windows; skips the thin strips and helpers browsers keep around.
+            return width >= 300 && height >= 300 && (w[kCGWindowAlpha as String] as? Double ?? 1) > 0
+        }.count
     }
 }

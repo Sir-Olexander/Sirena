@@ -87,6 +87,17 @@ final class FeatureTests: XCTestCase {
         XCTAssertEqual(send.map(\.line), ["focus composer", "type hi", "confirm \"Send “hi”?\"", "press return"])
     }
 
+    func testTabSetIndices() {
+        XCTAssertEqual(BrowserControl.indices(of: .right, count: 6, active: 2).close, [3, 4, 5, 6])
+        XCTAssertEqual(BrowserControl.indices(of: .left, count: 6, active: 4).close, [1, 2, 3])
+        XCTAssertEqual(BrowserControl.indices(of: .others, count: 4, active: 2).close, [1, 3, 4])
+        XCTAssertEqual(BrowserControl.indices(of: .others, count: 4, active: 2).keep, 2)
+        XCTAssertEqual(BrowserControl.indices(of: .allExcept(.first), count: 5, active: 3).close, [2, 3, 4, 5])
+        XCTAssertEqual(BrowserControl.indices(of: .allExcept(.last), count: 5, active: 3).keep, 5)
+        XCTAssertEqual(BrowserControl.indices(of: .right, count: 3, active: 3).close, [])
+        XCTAssertEqual(BrowserControl.indices(of: .allExcept(.index(9)), count: 3, active: 1).close, [])
+    }
+
     func testRunPrefix() {
         XCTAssertEqual(CommandPipeline.stripRunPrefix("run call mom").1, "call mom")
         XCTAssertEqual(CommandPipeline.stripRunPrefix("run the shortcut called Morning Routine.").1, "Morning Routine")

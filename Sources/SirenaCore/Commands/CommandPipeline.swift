@@ -272,12 +272,14 @@ public final class CommandPipeline {
                         }
                     }
                     if unverifiable { return .init(summary: res.summary, stop: true, newSnapshotText: nil) }
+                    context.invalidateBrowserCache()
                     let fresh = await Task.detached(priority: .userInitiated) { [context] in context.snapshot(includeElements: true, maxElements: 100).promptText() }.value
                     roundStart = Date()
                     return .init(summary: res.summary, stop: false, newSnapshotText: fresh)
                 } catch let e as ExecutionError {
                     actMs += Int(Date().timeIntervalSince(ta) * 1000)
                     lastFailure = e.localizedDescription
+                    context.invalidateBrowserCache()
                     let fresh = await Task.detached(priority: .userInitiated) { [context] in context.snapshot(includeElements: true, maxElements: 100).promptText() }.value
                     roundStart = Date()
                     return .init(summary: "Failed: \(e.localizedDescription). Try another way, or call need_screen.", stop: false, newSnapshotText: fresh)

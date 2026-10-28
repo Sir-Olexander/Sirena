@@ -33,6 +33,7 @@ enum UndoRecord {
     case textInserted
     case appSwitched(previous: AppInfo?)
     case tabSwitched(browser: BrowserInfo, previousIndex: Int)
+    case tabsClosed(browser: AppInfo, count: Int)
     case keyPressed
     case generic
 }
@@ -163,6 +164,8 @@ public final class ActionExecutor {
             return try switchTab(target, snapshot: &snap)
         case .closeTab:
             Keyboard.press(KeyCombo("w", [.command])); return "Closed tab"
+        case .closeTabs(let set):
+            return try closeTabs(set, snapshot: &snap)
         case .newTab:
             Keyboard.press(KeyCombo("t", [.command])); return "New tab"
         case .reopenTab:
@@ -278,10 +281,12 @@ public final class ActionExecutor {
     private func activate(_ app: AppInfo, snapshot snap: inout ScreenSnapshot) -> String {
         let previous = snap.frontApp
         RunningApps.activate(app)
+        // An app with no windows (e.g. Chrome after its last window closed): reopen like the Dock does.
+        let reopened = RunningApps.ensureWindow(app)
         undoStack.append(.appSwitched(previous: previous))
         snap = context.snapshot(includeElements: false, includeBrowser: false)
         numbers.frontAppChanged(pid: app.pid)
-        return "Switched to \(app.name)"
+        return reopened ? "Opened a new \(app.name) window" : "Switched to \(app.name)"
     }
 
     /// "open X": an exact app name (or "X app") → the app; a website name → the site in the front browser;
@@ -372,6 +377,39 @@ public final class ActionExecutor {
             return "Opening \(url.deletingPathExtension().lastPathComponent)"
         }
         throw ExecutionError.unresolved(target)
+    }
+
+    /// Closes exactly the tabs a `TabSet` covers, from the browser's real tab list (no model, same every time).
+    private func closeTabs(_ set: TabSet, snapshot snap: inout ScreenSnapshot) throws -> String {
+        var app = snap.frontApp
+        if app == nil || !BrowserControl.isBrowser(app!.bundleId) {
+            guard let b = BrowserControl.preferredRunningBrowser(apps: snap.apps) else { throw ExecutionError.failed("No browser is open") }
+            _ = activate(b, snapshot: &snap)
+            app = b
+        }
+        guard let browser = app else { throw ExecutionError.failed("No browser") }
+        // Always a fresh tab list: a cached one could close the wrong tabs.
+        guard let info = BrowserControl.info(for: browser) else {
+            throw ExecutionError.failed("\(browser.name) did not share its tabs — allow Sirena under System Settings → Privacy & Security → Automation")
+        }
+        let (close, keep) = BrowserControl.indices(of: set, count: info.tabs.count, active: info.activeIndex)
+        guard !close.isEmpty else { return "No tabs to close" }
+        guard BrowserControl.closeTabs(close, in: info) else { throw ExecutionError.failed("\(browser.name) refused to close the tabs") }
+        context.invalidateBrowserCache()
+        // The kept tab is now first when every other tab was closed; make sure it is the active one.
+        if let k = keep, k != info.activeIndex, let fresh = BrowserControl.info(for: browser) {
+            let newIndex = k - close.filter { $0 < k }.count
+            BrowserControl.activateTab(index: newIndex, in: fresh)
+        }
+        undoStack.append(.tabsClosed(browser: browser, count: close.count))
+        let n = close.count
+        let what: String
+        switch set {
+        case .right: what = "to the right"
+        case .left: what = "to the left"
+        case .others, .allExcept: what = "other"
+        }
+        return what == "other" ? "Closed \(n) other tab\(n == 1 ? "" : "s")" : "Closed \(n) tab\(n == 1 ? "" : "s") \(what)"
     }
 
     private func switchTab(_ target: TabTarget, snapshot snap: inout ScreenSnapshot) throws -> String {
@@ -493,6 +531,11 @@ public final class ActionExecutor {
         case .appSwitched(let previous):
             if let p = previous { RunningApps.activate(p); return "Back to \(p.name)" }
             Keyboard.press(KeyCombo("tab", [.command])); return "Previous app"
+        case .tabsClosed(let browser, let count):
+            RunningApps.activate(browser)
+            usleep(150_000)
+            for _ in 0..<min(count, 30) { Keyboard.press(KeyCombo("t", [.command, .shift])); usleep(120_000) }
+            return "Reopened \(count) tab\(count == 1 ? "" : "s")"
         case .tabSwitched(let browser, let previousIndex):
             RunningApps.activate(browser.app)
             BrowserControl.activateTab(index: previousIndex, in: browser)

@@ -26,6 +26,13 @@ public struct KeyCombo: Equatable, Codable, CustomStringConvertible {
 public enum ScrollDirection: String, Codable { case up, down, left, right }
 public enum ScrollAmount: String, Codable { case small, medium, large, page }
 
+/// Which tabs "close tabs …" closes, relative to the tab list of the front browser window.
+public enum TabSet: Equatable, Codable {
+    case right, left, others
+    /// "close all tabs but the first one": keep one tab, close the rest.
+    case allExcept(TabTarget)
+}
+
 public enum TabTarget: Equatable, Codable {
     case index(Int)
     case next, previous, last, first
@@ -42,6 +49,8 @@ public indirect enum Action: Equatable, Codable {
     case launchApp(String)
     case switchTab(TabTarget)
     case closeTab, newTab, reopenTab, reload, goBack, goForward
+    /// Closes exactly the tabs to the right / left / all others, worked out from the real tab list.
+    case closeTabs(TabSet)
     case openURL(String)
     case webSearch(String)
     case scroll(ScrollDirection, ScrollAmount)
@@ -126,6 +135,13 @@ public indirect enum Action: Equatable, Codable {
             case .title(let s): return "Tab “\(s)”"
             }
         case .closeTab: return "Closing tab"
+        case .closeTabs(let set):
+            switch set {
+            case .right: return "Closing the tabs to the right"
+            case .left: return "Closing the tabs to the left"
+            case .others: return "Closing the other tabs"
+            case .allExcept: return "Closing all tabs but one"
+            }
         case .newTab: return "New tab"
         case .reopenTab: return "Reopening tab"
         case .reload: return "Reloading"

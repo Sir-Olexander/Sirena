@@ -93,6 +93,9 @@ public final class ScreenContext {
 
     public func browserInfo(for app: AppInfo) -> BrowserInfo? { cachedBrowserInfo(for: app) }
 
+    /// After actions changed the tabs, the next snapshot must read them again.
+    public func invalidateBrowserCache() { lastBrowserInfo = nil }
+
     /// Vocabulary hints for the recognizer: the name, custom words, app names, window and tab titles.
     public func keywords(snapshot: ScreenSnapshot? = nil) -> [String] {
         let snap = snapshot ?? lastSnapshot ?? self.snapshot(includeElements: false)

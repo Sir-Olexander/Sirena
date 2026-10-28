@@ -118,6 +118,47 @@ public enum BrowserControl {
         return run(source) != nil || true
     }
 
+    /// Closes tabs of the front window by 1-based index (highest first, so the other indices stay valid).
+    /// Returns false when the browser refused (e.g. no Automation permission).
+    @discardableResult
+    public static func closeTabs(_ indices: [Int], in browser: BrowserInfo) -> Bool {
+        let sorted = Array(Set(indices)).filter { $0 >= 1 && $0 <= browser.tabs.count }.sorted(by: >)
+        guard !sorted.isEmpty else { return true }
+        let name = appleScriptName(for: browser.app)
+        let lines = sorted.map { "    close tab \($0) of w" }.joined(separator: "\n")
+        let source = """
+        tell application "\(name)"
+            set w to front window
+        \(lines)
+            return "ok"
+        end tell
+        """
+        return run(source) == "ok"
+    }
+
+    /// Tabs a `TabSet` covers, given the current tab list. Pure, so it can be tested.
+    public static func indices(of set: TabSet, count: Int, active: Int) -> (close: [Int], keep: Int?) {
+        guard count > 0 else { return ([], nil) }
+        let all = Array(1...count)
+        switch set {
+        case .right: return (all.filter { $0 > active }, nil)
+        case .left: return (all.filter { $0 < active }, nil)
+        case .others: return (all.filter { $0 != active }, active)
+        case .allExcept(let t):
+            let keep: Int?
+            switch t {
+            case .first: keep = 1
+            case .last: keep = count
+            case .index(let n): keep = (1...count).contains(n) ? n : nil
+            case .next: keep = active % count + 1
+            case .previous: keep = (active - 2 + count) % count + 1
+            case .title: keep = nil
+            }
+            guard let k = keep else { return ([], nil) }
+            return (all.filter { $0 != k }, k)
+        }
+    }
+
     public static func resolve(_ target: TabTarget, in browser: BrowserInfo) -> Int? {
         let count = browser.tabs.count
         guard count > 0 else { return nil }

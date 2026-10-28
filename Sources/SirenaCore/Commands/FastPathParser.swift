@@ -265,7 +265,33 @@ public enum FastPathParser {
         return nil
     }
 
+    /// "close (all) (the) tabs to the right", "close the other tabs", "close all tabs but the first one".
+    static func closeTabs(_ t: String) -> ParsedCommand? {
+        guard t.hasPrefix("close") || t.hasPrefix("keep only") || t.hasPrefix("get rid of") else { return nil }
+        let tabs = "(?:all\\s+)?(?:of\\s+)?(?:the\\s+)?(?:tabs?|taps?|everything|all)"
+        let here = "(?:\\s+(?:of|from)\\s+(?:this|the current|the active|the actual|my)?\\s*(?:one|tab|tap|page)?)?"
+        if t.firstMatch("^(?:close|get rid of)\\s+\(tabs)\\s+(?:to|on|at)\\s+the\\s+right\(here)$") != nil || t == "close tabs right" {
+            return ParsedCommand(.closeTabs(.right))
+        }
+        if t.firstMatch("^(?:close|get rid of)\\s+\(tabs)\\s+(?:to|on|at)\\s+the\\s+left\(here)$") != nil || t == "close tabs left" {
+            return ParsedCommand(.closeTabs(.left))
+        }
+        if t.firstMatch("^(?:close|get rid of)\\s+(?:all\\s+)?(?:of\\s+)?(?:the\\s+)?other\\s+(?:tabs?|taps?)$") != nil
+            || t.firstMatch("^(?:close|get rid of)\\s+\(tabs)\\s+(?:but|except|apart from|other than)\\s+(?:this|the current|the active|the actual|this current)(?:\\s+(?:one|tab|tap|page))?$") != nil
+            || ["keep only this tab", "keep only this one", "keep only the current tab"].contains(t) {
+            return ParsedCommand(.closeTabs(.others))
+        }
+        if let m = t.firstMatch("^(?:close|get rid of)\\s+\(tabs)\\s+(?:but|except|apart from|other than)\\s+(?:the\\s+)?(?:tab\\s+)?(?:number\\s+)?(\\S+)(?:\\s+(?:one|tab|tap))?$") {
+            let w = m[1]
+            if w == "last" { return ParsedCommand(.closeTabs(.allExcept(.last))) }
+            if w == "first" { return ParsedCommand(.closeTabs(.allExcept(.first))) }
+            if let n = Numbers.parse(w) { return ParsedCommand(.closeTabs(.allExcept(.index(n)))) }
+        }
+        return nil
+    }
+
     static func tabs(_ t: String) -> ParsedCommand? {
+        if let c = closeTabs(t) { return c }
         if ["next tab", "go to the next tab", "switch to the next tab", "go to next tab", "the next tab", "next tap", "tab right", "move to the next tab", "forward tab"].contains(t) { return ParsedCommand(.switchTab(.next)) }
         if ["previous tab", "go to the previous tab", "switch to the previous tab", "go to previous tab", "the previous tab", "prior tab", "tab left", "go back a tab", "back tab", "last tab i was on"].contains(t) { return ParsedCommand(.switchTab(.previous)) }
         if ["last tab", "go to the last tab", "switch to the last tab", "the last tab", "final tab", "go to last tab", "rightmost tab"].contains(t) { return ParsedCommand(.switchTab(.last)) }
