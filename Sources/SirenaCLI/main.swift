@@ -171,6 +171,63 @@ case "plan-demo":
     }
     sem.wait()
 
+case "edit":
+    // sirena-cli edit "<instruction>" "<text>"   — the text-edit rewrite only (nothing is typed)
+    guard positional.count >= 2 else { print("usage: edit <instruction> <text>"); exit(1) }
+    let client = metaClient()
+    let dict = DictationEngine(clientProvider: { client }, modelName: { "muse-spark-1.3" }, skipCleanup: { false })
+    let editor = DictationEditor(dictation: dict, clientProvider: { client }, modelName: { "muse-spark-1.3" })
+    let sem = DispatchSemaphore(value: 0)
+    Task {
+        let start = Date()
+        do { print(try await editor.previewRewrite(positional[1].replacingOccurrences(of: "\\n", with: "\n"), instruction: positional[0])) }
+        catch { print("error: \(error)") }
+        print("(\(ms(start)))")
+        sem.signal()
+    }
+    sem.wait()
+
+case "compile":
+    // sirena-cli compile "<shortcut name>" "<plain-language description>"
+    guard positional.count >= 2 else { print("usage: compile <name> <description>"); exit(1) }
+    let client = metaClient()
+    let compiler = ShortcutCompiler(clientProvider: { client }, modelName: { "muse-spark-1.3" })
+    let sem = DispatchSemaphore(value: 0)
+    Task {
+        let start = Date()
+        do {
+            let r = try await compiler.compile(name: positional[0], description: positional[1])
+            print(r.script)
+            if !r.errors.isEmpty { print("ERRORS: \(r.errors)") }
+            if !r.warnings.isEmpty { print("warnings: \(r.warnings)") }
+            let parsed = ShortcutScript.parse(r.script)
+            let values = Dictionary(uniqueKeysWithValues: ShortcutDefinition(name: positional[0], description: "", script: "").placeholders.map { ($0, "<\($0)>") })
+            print("--- actions:")
+            for a in ShortcutScript.actions(parsed.steps, values: values) { print("   \(a)") }
+        } catch { print("error: \(error)") }
+        print("(\(ms(start)))")
+        sem.signal()
+    }
+    sem.wait()
+
+case "dictate":
+    // sirena-cli dictate "<chunk>" ["<chunk>" ...]   — model cleanup + list handling, printed instead of typed
+    let client = metaClient()
+    let engine = DictationEngine(clientProvider: { client }, modelName: { "muse-spark-1.3" }, skipCleanup: { false })
+    engine.dryRun = true
+    engine.fieldText = { "" }
+    engine.beginSession(frontApp: nil)
+    let sem = DispatchSemaphore(value: 0)
+    Task {
+        for chunk in positional {
+            let r = await engine.insert(raw: chunk, continuing: true, frontApp: nil)
+            print("   (\(r.cleanupMs ?? 0) ms)")
+        }
+        print("--- session text:\n\(engine.sessionText)")
+        sem.signal()
+    }
+    sem.wait()
+
 case "simulate":
     var dictationRef: DictationEngine?
     // End-to-end wiring test: scripted utterances → router → pipeline (dry-run executor) → overlay model.

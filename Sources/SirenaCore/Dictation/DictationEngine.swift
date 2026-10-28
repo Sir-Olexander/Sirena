@@ -67,7 +67,7 @@ public final class DictationEngine {
             var body = marker.rest.trimmingCharacters(in: .whitespacesAndNewlines)
             if !body.isEmpty {
                 let (cleaned, ms, model) = await clean(body, app: frontApp, hint: "This chunk is the text of list item \(n). Do not add a number or bullet.")
-                body = cleaned.replacingOccurrences(of: "^\\s*(?:\\d{1,3}[.)]|[-•*])\\s+", with: "", options: .regularExpression)
+                body = DictationEngine.capitalizeFirst(cleaned.replacingOccurrences(of: "^\\s*(?:\\d{1,3}[.)]|[-•*])\\s+", with: "", options: .regularExpression))
                 cleanupMs = ms; usedModel = model
             }
             let prefix = atLineStart(samePlace: samePlace) ? "" : "\n"
@@ -76,6 +76,8 @@ public final class DictationEngine {
             let (cleaned, ms, model) = await clean(trimmed, app: frontApp, hint: nil)
             cleanupMs = ms; usedModel = model
             var text = cleaned
+            // Text of a list item whose number was said in the previous pause ("second point," … "check the monitors").
+            if sessionText.firstMatch("(?:^|\\n)\\d{1,3}[.)] $") != nil { text = DictationEngine.capitalizeFirst(text) }
             if text.firstMatch("^\\s*(?:1[.)]|[-•*])\\s") != nil, text.contains("\n") {
                 // A whole list in one breath: start it on its own line and continue the numbering.
                 if !atLineStart(samePlace: samePlace) { text = "\n" + text }
@@ -166,7 +168,7 @@ public final class DictationEngine {
         var user = "Destination app: \(app?.name ?? "unknown") — \(style)."
         let context = String(sessionText.suffix(240))
         if !context.isEmpty { user += "\nText already inserted before this chunk (context only, never repeat it): «\(context)»" }
-        if let hint { user += "\n\(hint)" }
+        if let hint { user += "\n\(hint) Start with a capital letter." }
         user += "\nDictated: \(raw)"
         let req = ChatRequest(model: modelName(), messages: [.system(DictationEngine.systemPrompt), .user(user)],
                               reasoning_effort: client.isLocal ? nil : "minimal", max_tokens: 1200, prompt_cache_key: "sirena-dictation")
@@ -179,6 +181,11 @@ public final class DictationEngine {
             Log.model.error("dictation cleanup failed: \(error.localizedDescription, privacy: .public)")
             return nil
         }
+    }
+
+    static func capitalizeFirst(_ s: String) -> String {
+        guard let i = s.firstIndex(where: { $0.isLetter }), s[s.startIndex..<i].allSatisfy({ !$0.isLetter && !$0.isNumber }) else { return s }
+        return s.replacingCharacters(in: i...i, with: String(s[i]).uppercased())
     }
 
     /// Instant rule-based cleanup used in raw mode or when the model is unavailable.

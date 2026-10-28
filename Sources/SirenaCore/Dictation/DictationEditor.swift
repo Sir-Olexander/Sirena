@@ -115,6 +115,12 @@ public final class DictationEditor {
     Output only the complete edited text, with no quotes or commentary.
     """
 
+    /// The model rewrite alone (used by the CLI to check the prompt).
+    public func previewRewrite(_ text: String, instruction: String) async throws -> String {
+        guard let client = clientProvider() else { throw APIError.missingKey }
+        return try await rewrite(text, instruction: instruction, client: client)
+    }
+
     private func rewrite(_ text: String, instruction: String, client: MetaAPIClient) async throws -> String {
         let req = ChatRequest(model: modelName(), messages: [
             .system(DictationEditor.systemPrompt),
