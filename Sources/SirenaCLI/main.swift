@@ -296,7 +296,8 @@ case "simulate":
                                          transcriber: transcriber, audio: AudioCapture(), fallback: nil, history: HistoryLog(directory: URL(fileURLWithPath: "/tmp/sirena-sim")), numbers: numbers)
     controller.simulateInput = true
     let script: [(Double, String)] = positional.isEmpty ? [
-        (0.0, "Sirena, switch to Chrome"), (1.0, "go to the first tab"), (1.0, "scroll down"), (8.0, "switch to Slack"),
+        (0.0, "Sirena, switch to Chrome"), (1.0, "go to the first tab"), (1.0, "scroll down"), (1.0, "so how was the meeting yesterday"),
+        (8.0, "switch to Slack"),
         (0.5, "Sirena, send a message to Claude saying summarize the page I just read"), (2.0, "yes"),
         (1.0, "Sirena, start dictating"), (1.0, "um so basically the meeting is moved to Friday"), (1.0, "Sirena, stop"),
         (1.0, "Sirena, wait"), (1.0, "Sirena, scroll down"), (1.0, "Hey Sirena"), (1.0, "Sirena, stop listening"),
