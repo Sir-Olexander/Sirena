@@ -45,7 +45,7 @@ final class FeatureTests: XCTestCase {
     func testLooseRange() {
         let field = "Title\n1.\tAdd an identifier.\n2.\tCan Sirena see both screens?"
         let session = "1. Add an identifier.\n2. Can Sirena see both screens?"
-        let r = TextEditor.looseRange(of: session, in: field)
+        let r = DictationEditor.looseRange(of: session, in: field)
         XCTAssertNotNil(r)
         let found = (field as NSString).substring(with: r!)
         XCTAssertTrue(found.hasPrefix("Add an identifier"))

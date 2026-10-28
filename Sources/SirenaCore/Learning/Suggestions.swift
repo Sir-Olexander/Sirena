@@ -36,7 +36,7 @@ public final class Suggestions: ObservableObject {
     public static let maxVisible = 3
 
     public init(directory: URL? = nil) {
-        let dir = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Sirena", isDirectory: true)
+        let dir = directory ?? SirenaPaths.dataDirectory
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         url = dir.appendingPathComponent("suggestions.json")
         let dec = JSONDecoder(); dec.dateDecodingStrategy = .iso8601

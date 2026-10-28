@@ -15,6 +15,8 @@ public final class Settings: ObservableObject {
     @Published public var localModelBaseURL: String { didSet { defaults.set(localModelBaseURL, forKey: "localModelBaseURL") } }
     @Published public var onboardingDone: Bool { didSet { defaults.set(onboardingDone, forKey: "onboardingDone") } }
     @Published public var globalShortcutEnabled: Bool { didSet { defaults.set(globalShortcutEnabled, forKey: "globalShortcutEnabled") } }
+    /// Dev mode: the usage panel is shown.
+    @Published public var devMode: Bool { didSet { defaults.set(devMode, forKey: "devMode") } }
     /// Clean the microphone with voice processing (noise suppression, echo cancellation) before recognition.
     @Published public var noiseReduction: Bool { didSet { defaults.set(noiseReduction, forKey: "noiseReduction") } }
     /// While waiting, detect "Hey Sirena" on-device and keep audio off the network.
@@ -63,5 +65,6 @@ public final class Settings: ObservableObject {
         globalShortcutEnabled = defaults.object(forKey: "globalShortcutEnabled") as? Bool ?? true
         localWakeWord = defaults.object(forKey: "localWakeWord") as? Bool ?? true
         noiseReduction = defaults.object(forKey: "noiseReduction") as? Bool ?? true
+        devMode = defaults.bool(forKey: "devMode")
     }
 }

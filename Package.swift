@@ -11,7 +11,12 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "SirenaObjC",
+            path: "Sources/SirenaObjC"
+        ),
+        .target(
             name: "SirenaCore",
+            dependencies: ["SirenaObjC"],
             path: "Sources/SirenaCore"
         ),
         .executableTarget(

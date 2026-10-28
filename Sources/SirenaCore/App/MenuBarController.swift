@@ -23,6 +23,13 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
     public var localWakeStatus: () -> String = { "" }
     public var onLocalWakeToggled: (() -> Void)?
     public var onNoiseReductionToggled: (() -> Void)?
+    public var onDevModeToggled: (() -> Void)?
+    public var onSuggestions: (() -> Void)?
+    public var onShortcuts: (() -> Void)?
+    public var onNotes: (() -> Void)?
+    public var onPlainHistory: (() -> Void)?
+    public var onSessionLog: (() -> Void)?
+    public var suggestionCount: () -> Int = { 0 }
     public var microphoneStatus: () -> String = { "" }
 
     public init(settings: Settings) {
@@ -113,8 +120,19 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(large)
         menu.addItem(item("Reset overlay position", #selector(resetOverlay), key: ""))
         menu.addItem(.separator())
+        let n = suggestionCount()
+        let sug = item(n > 0 ? "Suggestions (\(n))…" : "Suggestions…", #selector(suggestions), key: "")
+        menu.addItem(sug)
+        menu.addItem(item("Shortcut book…", #selector(shortcuts), key: ""))
+        menu.addItem(item("Notes & snippets…", #selector(notes), key: ""))
         menu.addItem(item("Custom vocabulary…", #selector(vocabulary), key: ""))
         menu.addItem(item("Command history…", #selector(history), key: ""))
+        menu.addItem(item("Command history (plain text)…", #selector(plainHistory), key: ""))
+        menu.addItem(.separator())
+        let dev = item("Developer mode (usage panel)", #selector(toggleDev), key: "")
+        dev.state = settings.devMode ? .on : .off
+        menu.addItem(dev)
+        menu.addItem(item("Session log…", #selector(sessionLog), key: ""))
         menu.addItem(.separator())
         let perms = item("Permissions & API key…", #selector(permissions), key: "")
         let summary = permissionsSummary()
@@ -162,6 +180,12 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func resetOverlay() { onResetOverlay?() }
     @objc private func vocabulary() { onVocabulary?() }
     @objc private func history() { onHistory?() }
+    @objc private func plainHistory() { onPlainHistory?() }
+    @objc private func suggestions() { onSuggestions?() }
+    @objc private func shortcuts() { onShortcuts?() }
+    @objc private func notes() { onNotes?() }
+    @objc private func sessionLog() { onSessionLog?() }
+    @objc private func toggleDev() { settings.devMode.toggle(); onDevModeToggled?(); onSettingsChanged?() }
     @objc private func permissions() { onPermissions?() }
     @objc private func quit() { NSApp.terminate(nil) }
 }

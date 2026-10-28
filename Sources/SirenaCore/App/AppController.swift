@@ -17,7 +17,7 @@ public final class AppController {
     let computerUse: ComputerUseAgent
     let pipeline: CommandPipeline
     let dictation: DictationEngine
-    let textEditor: TextEditor
+    let textEditor: DictationEditor
     let transcriber: RealtimeTranscriber
     let audio = AudioCapture()
     let fallback: OneShotTranscriber
@@ -28,6 +28,20 @@ public final class AppController {
     let vocabulary = VocabularyWindowController()
     let historyWindow = HistoryWindowController()
     let hotkeys = HotkeyMonitor()
+    let devPanel = DevPanelController()
+    let shortcutCompiler: ShortcutCompiler
+    let historyHost = WindowHost(title: "Sirena — Command history", size: NSSize(width: 1000, height: 560))
+    let shortcutsHost = WindowHost(title: "Sirena — Shortcut book", size: NSSize(width: 860, height: 620))
+    let notesHost = WindowHost(title: "Sirena — Notes & snippets", size: NSSize(width: 620, height: 520))
+    let suggestionsHost = WindowHost(title: "Sirena — Suggestions", size: NSSize(width: 540, height: 480))
+    lazy var shortcutsVM: ShortcutsViewModel = {
+        let vm = ShortcutsViewModel(book: .shared, compiler: shortcutCompiler)
+        vm.onTest = { [weak self] def, values in self?.runInLastApp { self?.pipeline.run(shortcut: def, values: values) } }
+        vm.onRunApple = { [weak self] name in self?.runInLastApp { self?.pipeline.handle(command: "run \(name)", asrMs: nil) } }
+        return vm
+    }()
+    /// The app the user worked in before opening one of Sirena's windows.
+    private var lastExternalApp: NSRunningApplication?
 
     public init() {
         APIKeyStore.persistEnvironmentKeyIfNeeded()
@@ -43,7 +57,8 @@ public final class AppController {
                                    overlay: overlayModel, history: history, settings: settings)
         dictation = DictationEngine(inserter: inserter, clientProvider: { localClientRef() }, modelName: { localModelRef() },
                                     skipCleanup: { settings.rawDictation })
-        textEditor = TextEditor(dictation: dictation, inserter: inserter, clientProvider: { localClientRef() }, modelName: { localModelRef() })
+        shortcutCompiler = ShortcutCompiler(clientProvider: { localClientRef() }, modelName: { localModelRef() })
+        textEditor = DictationEditor(dictation: dictation, inserter: inserter, clientProvider: { localClientRef() }, modelName: { localModelRef() })
         transcriber = RealtimeTranscriber(apiKey: key)
         fallback = OneShotTranscriber(client: metaClient)
         listening = ListeningController(settings: settings, overlay: overlayModel, context: context, pipeline: pipeline, dictation: dictation,
@@ -64,6 +79,7 @@ public final class AppController {
             return self.overlays.windowIDs + (self.numbers.windowID.map { [$0] } ?? [])
         }
         wire()
+        wireWindows()
         applySettings()
         overlays.show()
         startFrontAppTracking()
@@ -214,7 +230,7 @@ public final class AppController {
 
         hotkeys.onToggle = { [weak self] in
             guard let self, self.settings.globalShortcutEnabled else { return }
-            self.listening.toggle()
+            self.listening.toggle(method: "shortcut")
         }
         hotkeys.pushToTalkEnabled = { [weak self] in self?.settings.pushToTalk ?? false }
         hotkeys.onPushToTalk = { [weak self] key in self?.listening.pushToTalkKey = key }
@@ -226,7 +242,90 @@ public final class AppController {
     }
     private var bag = Set<AnyCancellable>()
 
+    // MARK: - Windows
+
+    private func wireWindows() {
+        history.onAppend = { entry in SessionStats.shared.record(entry) }
+        listening.onSessionEnded = { [weak self] _ in
+            guard let self else { return }
+            // Learning runs only after Sirena is turned off, locally, without tokens.
+            Suggestions.shared.learnInBackground(history: self.history)
+        }
+        pipeline.onWindowAction = { [weak self] action in
+            switch action {
+            case .openNotesWindow: self?.showNotes()
+            case .openShortcutsWindow: self?.showShortcuts()
+            case .openHistoryWindow: self?.showHistory()
+            default: break
+            }
+        }
+        menuBar.onHistory = { [weak self] in self?.showHistory() }
+        menuBar.onPlainHistory = { [weak self] in
+            guard let self else { return }
+            self.historyWindow.show(entries: self.history.recent(100), fileURL: self.history.url)
+        }
+        menuBar.onShortcuts = { [weak self] in self?.showShortcuts() }
+        menuBar.onNotes = { [weak self] in self?.showNotes() }
+        menuBar.onSuggestions = { [weak self] in self?.showSuggestions() }
+        menuBar.suggestionCount = { Suggestions.shared.count }
+        menuBar.onSessionLog = {
+            let url = SessionStats.shared.logURL
+            if FileManager.default.fileExists(atPath: url.path) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+            else { NSWorkspace.shared.open(url.deletingLastPathComponent()) }
+        }
+        devPanel.onOpenLog = { [weak self] in self?.menuBar.onSessionLog?() }
+        menuBar.onDevModeToggled = { [weak self] in self?.applySettings() }
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                  app.bundleIdentifier != Bundle.main.bundleIdentifier else { return }
+            self?.lastExternalApp = app
+        }
+    }
+
+    func showHistory() {
+        let vm = HistoryViewModel(history: history)
+        historyHost.show(HistoryView(vm: vm, runAgain: { [weak self] e in self?.runAgain(e) },
+                                     showPlainText: { [weak self] in self?.menuBar.onPlainHistory?() }))
+    }
+
+    func showShortcuts() { shortcutsHost.show(ShortcutsView(vm: shortcutsVM, book: .shared)) }
+
+    func showNotes() { notesHost.show(NotesView(store: .shared)) }
+
+    func showSuggestions() {
+        suggestionsHost.show(SuggestionsView(suggestions: .shared, accept: { [weak self] s in
+            if let def = Suggestions.shared.accept(s.id) { self?.overlayModel.showMessage("Learned “\(def.name)”", autoClear: 3) }
+        }, edit: { [weak self] s in
+            guard let self else { return }
+            self.shortcutsVM.loadDraft(name: s.trigger, description: s.script == nil ? s.trigger : "Learned: \(s.reason)", script: s.script ?? "",
+                                       learned: true, suggestionId: s.id)
+            self.showShortcuts()
+        }))
+    }
+
+    /// Gives focus back to the app the user worked in, then runs `work` there.
+    func runInLastApp(_ work: @escaping () -> Void) {
+        if let app = lastExternalApp, !app.isTerminated { app.activate(options: [.activateIgnoringOtherApps]) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: work)
+    }
+
+    /// History window "Run again".
+    func runAgain(_ e: HistoryEntry) {
+        runInLastApp { [weak self] in
+            guard let self else { return }
+            if e.route == "dictation", let text = e.result, !text.isEmpty {
+                self.inserter.insert(text.trimmingCharacters(in: .whitespaces))
+            } else if let sid = e.shortcutId, let id = UUID(uuidString: sid), let def = ShortcutBook.shared.shortcut(id),
+                      let values = ShortcutBook.shared.match(e.command ?? e.utterance)?.1 {
+                self.pipeline.run(shortcut: def, values: values)
+            } else {
+                self.pipeline.handle(command: e.command ?? WakeWord.stripLeadingName(e.utterance) ?? e.utterance, asrMs: nil)
+            }
+        }
+    }
+
     func applySettings() {
+        if settings.devMode { devPanel.show() } else { devPanel.hide() }
         overlayModel.showLatency = settings.showLatency
         overlayModel.large = settings.largeOverlay
         numbers.large = settings.largeOverlay

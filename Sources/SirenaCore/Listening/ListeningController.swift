@@ -136,10 +136,10 @@ public final class ListeningController {
 
     // MARK: - State changes
 
-    public func toggle() {
+    public func toggle(method: String = "click") {
         switch state {
-        case .off: turnOn()
-        case .waiting: wake(method: "click")
+        case .off: turnOn(method: method)
+        case .waiting: wake(method: method)
         case .awake: turnOff()
         }
     }

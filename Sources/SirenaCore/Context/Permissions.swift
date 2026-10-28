@@ -3,9 +3,10 @@ import AppKit
 import AVFoundation
 import ApplicationServices
 import CoreGraphics
+import Speech
 
 public enum Permission: String, CaseIterable, Identifiable {
-    case microphone, accessibility, screenRecording, automation
+    case microphone, accessibility, screenRecording, automation, speechRecognition
     public var id: String { rawValue }
 
     public var title: String {
@@ -14,6 +15,7 @@ public enum Permission: String, CaseIterable, Identifiable {
         case .accessibility: return "Accessibility"
         case .screenRecording: return "Screen Recording"
         case .automation: return "Automation"
+        case .speechRecognition: return "Speech Recognition"
         }
     }
     public var why: String {
@@ -22,6 +24,7 @@ public enum Permission: String, CaseIterable, Identifiable {
         case .accessibility: return "To click, type and press shortcuts in other apps."
         case .screenRecording: return "Only for the screenshot fallback (\"Looking at the screen…\")."
         case .automation: return "To switch browser tabs in Chrome and Safari."
+        case .speechRecognition: return "Only for the on-device “Hey Sirena” while waiting. Also needs Dictation on (System Settings → Keyboard → Dictation)."
         }
     }
     public var settingsURL: URL {
@@ -31,6 +34,7 @@ public enum Permission: String, CaseIterable, Identifiable {
         case .accessibility: anchor = "Privacy_Accessibility"
         case .screenRecording: anchor = "Privacy_ScreenCapture"
         case .automation: anchor = "Privacy_Automation"
+        case .speechRecognition: anchor = "Privacy_SpeechRecognition"
         }
         return URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)")!
     }
@@ -58,6 +62,12 @@ public enum Permissions {
         case .automation:
             if let g = automationGranted { return g ? .granted : .denied }
             return .unknown
+        case .speechRecognition:
+            switch SFSpeechRecognizer.authorizationStatus() {
+            case .authorized: return .granted
+            case .notDetermined: return .notDetermined
+            default: return .denied
+            }
         }
     }
 
@@ -77,6 +87,8 @@ public enum Permissions {
         case .screenRecording:
             let ok = CGRequestScreenCaptureAccess()
             completion(ok ? .granted : .denied)
+        case .speechRecognition:
+            LocalWakeWordDetector.requestAuthorization { ok in completion(ok ? .granted : .denied) }
         case .automation:
             DispatchQueue.global().async {
                 let ok = BrowserControl.run("tell application \"System Events\" to return name of first process", timeout: 10) != nil

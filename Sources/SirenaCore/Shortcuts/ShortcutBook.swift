@@ -37,7 +37,7 @@ public final class ShortcutBook: ObservableObject {
     private let url: URL
 
     public init(directory: URL? = nil) {
-        let dir = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Sirena", isDirectory: true)
+        let dir = directory ?? SirenaPaths.dataDirectory
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         url = dir.appendingPathComponent("shortcuts.json")
         let dec = JSONDecoder(); dec.dateDecodingStrategy = .iso8601

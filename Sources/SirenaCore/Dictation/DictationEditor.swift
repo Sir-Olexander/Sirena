@@ -4,7 +4,7 @@ import AppKit
 /// "Sirena, make that a list", "separate the points with two line breaks", "fix the grammar":
 /// rewrites the text dictated in the current session (else the selection, else the focused field) with the model,
 /// then replaces it in place. Never needs a screenshot.
-public final class TextEditor {
+public final class DictationEditor {
     public var clientProvider: () -> MetaAPIClient?
     public var modelName: () -> String
     private let dictation: DictationEngine
@@ -46,7 +46,7 @@ public final class TextEditor {
             if sessionHere {
                 let exact = ns.range(of: session, options: .backwards)
                 if exact.location != NSNotFound { return .range(el, exact, session) }
-                if let r = TextEditor.looseRange(of: session, in: value) { return .range(el, r, ns.substring(with: r)) }
+                if let r = DictationEditor.looseRange(of: session, in: value) { return .range(el, r, ns.substring(with: r)) }
             }
             if let sel = selectedRange(el), sel.length > 0 { return .range(el, sel, ns.substring(with: sel)) }
             if ns.length > 0, ns.length <= 6000 { return .range(el, NSRange(location: 0, length: ns.length), value) }
@@ -117,7 +117,7 @@ public final class TextEditor {
 
     private func rewrite(_ text: String, instruction: String, client: MetaAPIClient) async throws -> String {
         let req = ChatRequest(model: modelName(), messages: [
-            .system(TextEditor.systemPrompt),
+            .system(DictationEditor.systemPrompt),
             .user("Instruction: \(instruction)\n\nText:\n\(text)"),
         ], reasoning_effort: client.isLocal ? nil : "minimal", max_tokens: 1500 + text.count, prompt_cache_key: "sirena-edit")
         let resp = try await client.chat(req, category: .dictation)

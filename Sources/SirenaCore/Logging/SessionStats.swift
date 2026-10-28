@@ -99,7 +99,7 @@ public final class SessionStats: ObservableObject {
     private let liveURL: URL
 
     public init(directory: URL? = nil) {
-        dir = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Sirena", isDirectory: true)
+        dir = directory ?? SirenaPaths.dataDirectory
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         logURL = dir.appendingPathComponent("sessions.jsonl")
         liveURL = dir.appendingPathComponent("current-session.json")

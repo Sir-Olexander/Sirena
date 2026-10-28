@@ -1,5 +1,16 @@
 import Foundation
 import AVFoundation
+import SirenaObjC
+
+/// Runs AVAudioEngine graph calls that may raise Objective-C exceptions on some devices.
+func catchingObjC(_ what: String, _ body: () -> Void) throws {
+    do {
+        try SRNObjC.`try`(body)
+    } catch {
+        Log.speech.error("\(what, privacy: .public) raised: \(error.localizedDescription, privacy: .public)")
+        throw error
+    }
+}
 
 /// Captures the microphone and delivers mono 16-bit PCM at 24 kHz in ~80 ms chunks (3840 bytes).
 ///
@@ -36,24 +47,35 @@ public final class AudioCapture {
     private var restarts: [Date] = []
     public private(set) var isRunning = false
     public private(set) var inputDescription = ""
+    /// Why voice processing could not be used on the current microphone (nil when it works or was not requested).
+    public private(set) var voiceProcessingError: String?
 
     public init() {}
 
     public func start() throws {
         guard !isRunning else { return }
         if voiceProcessing {
-            do {
-                try startEngine(withVoiceProcessing: true)
-                return
-            } catch {
-                Log.speech.error("voice processing unavailable (\(error.localizedDescription, privacy: .public)); using the plain microphone")
-                teardown()
+            // With the echo-cancelled player first; some devices (e.g. Bluetooth headsets in call mode) refuse the
+            // output side, so then without it; then the plain microphone.
+            for withPlayer in [true, false] {
+                do {
+                    try startEngine(withVoiceProcessing: true, withPlayer: withPlayer)
+                    return
+                } catch {
+                    let ns = error as NSError
+                    voiceProcessingError = "\(ns.localizedDescription) (\(ns.domain) \(ns.code)) at \(setupStep)\(withPlayer ? " with player" : "")"
+                    Log.speech.error("voice processing attempt failed: \(self.voiceProcessingError ?? "", privacy: .public)")
+                    teardown()
+                }
             }
         }
-        try startEngine(withVoiceProcessing: false)
+        try startEngine(withVoiceProcessing: false, withPlayer: false)
     }
 
-    private func startEngine(withVoiceProcessing vp: Bool) throws {
+    private var setupStep = ""
+
+    private func startEngine(withVoiceProcessing vp: Bool, withPlayer: Bool) throws {
+        setupStep = "enable"
         engine = AVAudioEngine()
         let input = engine.inputNode
         voiceProcessingActive = false
@@ -64,6 +86,7 @@ public final class AudioCapture {
             input.isVoiceProcessingAGCEnabled = true
             voiceProcessingActive = true
         }
+        setupStep = "format"
         let inFormat = input.outputFormat(forBus: 0)
         guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else {
             throw NSError(domain: "Sirena.Audio", code: 1, userInfo: [NSLocalizedDescriptionKey: "No microphone input available"])
@@ -74,29 +97,49 @@ public final class AudioCapture {
         conv.downmix = true
         converter = conv
         pending.removeAll()
-        if vp {
+        setupStep = "player"
+        if vp && withPlayer {
             // Playback through the same voice-processing unit is removed from the microphone signal.
+            // Optional: on devices where the graph refuses it, reading aloud uses its own engine.
             let player = AVAudioPlayerNode()
-            engine.attach(player)
             let rate = engine.outputNode.outputFormat(forBus: 0).sampleRate
-            let fmt = AVAudioFormat(standardFormatWithSampleRate: rate > 0 ? rate : 48_000, channels: 1)!
-            engine.connect(player, to: engine.mainMixerNode, format: fmt)
-            playbackNode = player
-            playbackFormat = fmt
+            if rate > 0, let fmt = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1) {
+                do {
+                    try catchingObjC("connect") {
+                        engine.attach(player)
+                        engine.connect(player, to: engine.mainMixerNode, format: fmt)
+                    }
+                    playbackNode = player
+                    playbackFormat = fmt
+                } catch {
+                    Log.speech.error("echo-cancelled playback unavailable: \(error.localizedDescription, privacy: .public)")
+                    playbackNode = nil
+                    playbackFormat = nil
+                }
+            }
         } else {
             playbackNode = nil
             playbackFormat = nil
         }
-        input.installTap(onBus: 0, bufferSize: 2048, format: inFormat) { [weak self] buffer, _ in
-            self?.process(buffer)
+        setupStep = "tap"
+        try catchingObjC("installTap") {
+            input.installTap(onBus: 0, bufferSize: 2048, format: inFormat) { [weak self] buffer, _ in
+                self?.process(buffer)
+            }
         }
-        engine.prepare()
+        setupStep = "start"
         do {
-            try engine.start()
+            var startError: Error?
+            try catchingObjC("start") {
+                engine.prepare()
+                do { try engine.start() } catch { startError = error }
+            }
+            if let startError { throw startError }
         } catch {
             input.removeTap(onBus: 0)
             throw error
         }
+        if vp { voiceProcessingError = nil }
         isRunning = true
         startedAt = Date()
         inputDescription = "\(Int(inFormat.sampleRate)) Hz, \(inFormat.channelCount) ch\(vp ? ", noise reduction on" : "")"

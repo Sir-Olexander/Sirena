@@ -17,6 +17,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
+        if let i = args.firstIndex(of: "--selftest"), i + 2 < args.count {
+            let name = args[i + 1], report = URL(fileURLWithPath: args[i + 2])
+            Task {
+                let text = await SelfTests.run(name, args: Array(args.dropFirst(i + 3)))
+                try? text.write(to: report, atomically: true, encoding: .utf8)
+                await MainActor.run { NSApp.terminate(nil) }
+            }
+            return
+        }
         controller = AppController()
     }
 

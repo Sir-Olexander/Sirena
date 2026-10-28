@@ -66,7 +66,7 @@ public final class HistoryLog {
     }()
 
     public init(directory: URL? = nil) {
-        let dir = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Sirena", isDirectory: true)
+        let dir = directory ?? SirenaPaths.dataDirectory
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         url = dir.appendingPathComponent("history.jsonl")
     }

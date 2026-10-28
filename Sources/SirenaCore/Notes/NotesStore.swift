@@ -31,7 +31,7 @@ public final class NotesStore: ObservableObject {
     private let snippetsURL: URL
 
     public init(directory: URL? = nil) {
-        let dir = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Sirena", isDirectory: true)
+        let dir = directory ?? SirenaPaths.dataDirectory
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         notesURL = dir.appendingPathComponent("notes.json")
         snippetsURL = dir.appendingPathComponent("snippets.json")

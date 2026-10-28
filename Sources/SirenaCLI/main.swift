@@ -12,6 +12,10 @@ import SirenaCore
 ///   sirena-cli keywords                      print the vocabulary hints
 ///   sirena-cli simulate ["utterance" ...] [--raw]   scripted utterances through router → pipeline (dry run) → overlay model
 
+// Simulations never touch the real history, notes, shortcuts or session log.
+if CommandLine.arguments.dropFirst().first == "simulate", ProcessInfo.processInfo.environment["SIRENA_DATA_DIR"] == nil {
+    setenv("SIRENA_DATA_DIR", "/tmp/sirena-sim", 1)
+}
 let args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else {
     print("usage: sirena-cli transcribe <wav> | parse <text> | plan <text> | plan-demo | snapshot | keywords")
@@ -168,6 +172,7 @@ case "plan-demo":
     sem.wait()
 
 case "simulate":
+    var dictationRef: DictationEngine?
     // End-to-end wiring test: scripted utterances → router → pipeline (dry-run executor) → overlay model.
     let settings = Settings.shared
     let overlay = OverlayModel()
@@ -176,11 +181,16 @@ case "simulate":
     let client = metaClient()
     let executor = ActionExecutor(context: context, numbers: numbers, inserter: TextInserter.shared)
     executor.dryRun = true
+    executor.textEditHandler = { instruction in
+        print("   [dry run] editText(\(instruction)) on the dictated text: \"\(dictationRef?.sessionText.replacingOccurrences(of: "\n", with: "\\n") ?? "")\"")
+        return "Edited"
+    }
     let planner = ModelCommandPlanner(clientProvider: { client }, modelName: { "muse-spark-1.3" })
     let cu = ComputerUseAgent(clientProvider: { client }, modelName: { "muse-spark-1.3" })
     let pipeline = CommandPipeline(context: context, executor: executor, planner: planner, computerUse: cu, overlay: overlay, history: HistoryLog(directory: URL(fileURLWithPath: "/tmp/sirena-sim")), settings: settings)
     let dictation = DictationEngine(inserter: TextInserter.shared, clientProvider: { client }, modelName: { "muse-spark-1.3" }, skipCleanup: { flags.contains("--raw") })
     dictation.dryRun = true
+    dictationRef = dictation
     dictation.fieldText = { nil }
     let transcriber = RealtimeTranscriber(apiKey: nil)
     let controller = ListeningController(settings: settings, overlay: overlay, context: context, pipeline: pipeline, dictation: dictation,

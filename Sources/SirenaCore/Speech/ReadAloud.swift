@@ -117,11 +117,17 @@ public final class ReadAloud {
         }
         let engine = AVAudioEngine()
         let p = AVAudioPlayerNode()
-        engine.attach(p)
         let rate = engine.outputNode.outputFormat(forBus: 0).sampleRate
         let f = AVAudioFormat(standardFormatWithSampleRate: rate > 0 ? rate : 48_000, channels: 1)!
-        engine.connect(p, to: engine.mainMixerNode, format: f)
-        do { try engine.start() } catch { return false }
+        var startError: Error?
+        do {
+            try catchingObjC("reader engine") {
+                engine.attach(p)
+                engine.connect(p, to: engine.mainMixerNode, format: f)
+                do { try engine.start() } catch { startError = error }
+            }
+        } catch { return false }
+        if startError != nil { return false }
         ownEngine = engine
         player = p; format = f
         return true
