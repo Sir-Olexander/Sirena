@@ -210,6 +210,7 @@ public enum FastPathParser {
         if let c = appQualifiedTab(t) { return c }
         if let c = noteCommand(text, t) { return c }
         if let c = typeCommand(text, t) { return c }
+        if let c = sendCommand(t) { return c }
         if let c = messaging(text, t) { return c }
         if let c = screenCommand(t) { return c }
         if let c = numbersClick(t, context: context) { return c }
@@ -315,6 +316,13 @@ public enum FastPathParser {
     }
 
     static func stripLeadIns(_ raw: String) -> String { stripLeadingFillers(raw) }
+
+    /// "send", "send it", "send the message", "enviar": send what is in the message box, after a confirmation.
+    static func sendCommand(_ t: String) -> ParsedCommand? {
+        guard t.firstMatch("^(?:send|send it|send this|send that|send the message|send message|send my message|send the text|send now|send it now|hit send|press send|"
+                           + "enviar|envia|envia isso|envia a mensagem|enviar mensagem|manda|manda isso|manda a mensagem)$") != nil else { return nil }
+        return ParsedCommand([.focusComposer, .confirmThen(message: "", actions: [.pressReturnToSend])], label: "Sending the message")
+    }
 
     static func messaging(_ raw: String, _ t: String) -> ParsedCommand? {
         let cleaned = stripLeadIns(raw)

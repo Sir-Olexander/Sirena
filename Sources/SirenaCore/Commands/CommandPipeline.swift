@@ -340,6 +340,8 @@ public final class CommandPipeline {
         var lastFailure: String?
         var pendingShown = false
         var handedToScreen = false
+        /// The last round only asked a question with nothing behind it (sent back to the model).
+        var unconfirmable = false
         var actionsRun: [Action] = []
         var latencyCopy = latency
         do {
@@ -349,6 +351,19 @@ public final class CommandPipeline {
                 // Text edits never need a screenshot.
                 if actions.contains(where: { if case .computerUse = $0 { return true }; return false }), FastPathParser.looksLikeTextEdit(text) {
                     actions = [.editText(text)]
+                }
+                // A confirmation with nothing after it would make "yes" do nothing: repair the obvious case (sending
+                // what is in the message box), otherwise run nothing and ask the model for the guarded actions.
+                unconfirmable = false
+                if ConfirmationText.emptyConfirmation(in: actions) != nil {
+                    if let repaired = ConfirmationText.repairEmptyConfirmation(actions) {
+                        actions = repaired
+                    } else {
+                        unconfirmable = true
+                        roundStart = Date()
+                        return .init(summary: "Not run: you called confirm with no tool calls after it, so a “yes” would do nothing. If the command needs an action, call confirm again in this turn immediately followed by the tool calls it guards. Otherwise answer in one short sentence with no tool calls.",
+                                     stop: false, newSnapshotText: nil)
+                    }
                 }
                 actionsRun += actions
                 if let control = actions.first, control.isControl, actions.count == 1 {
@@ -402,6 +417,12 @@ public final class CommandPipeline {
             latency.actMs = actMs
             Log.model.info("plan: \(actionsRun.map { "\($0)" }.joined(separator: "; "), privacy: .public) tokens in=\(plan.promptTokens ?? 0) out=\(plan.completionTokens ?? 0)")
             if handedToScreen { return }
+            if unconfirmable {
+                overlay.showMessage("I wasn't sure what to do after a yes — say the whole command", autoClear: 4)
+                overlay.setLatency(latency)
+                log(text, layer: "model", actions: actionsRun, result: "error: confirmation without an action", latency: latency, failed: true)
+                return
+            }
             if pendingShown {
                 overlay.setLatency(latency)
                 log(text, layer: "model", actions: actionsRun, result: "awaiting confirmation", latency: latency)

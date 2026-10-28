@@ -18,6 +18,8 @@ public enum ExecutionError: Error, LocalizedError, Equatable {
     case elementNotFound(String)
     case failed(String)
     case needsScreen(String)
+    /// A confirmation question with no action after it: a "yes" would do nothing.
+    case emptyConfirmation(String)
 
     public var errorDescription: String? {
         switch self {
@@ -25,6 +27,7 @@ public enum ExecutionError: Error, LocalizedError, Equatable {
         case .elementNotFound(let s): return "No element called “\(s)”"
         case .failed(let s): return s
         case .needsScreen(let s): return "Needs a look at the screen: \(s)"
+        case .emptyConfirmation(let q): return "I asked “\(q)” without knowing what to do after a yes"
         }
     }
 }
@@ -119,7 +122,15 @@ public final class ActionExecutor {
         for (i, action) in actions.enumerated() {
             if case .confirmThen(let message, let inner) = action {
                 let remaining = inner + Array(actions.dropFirst(i + 1)) + rest
-                let question = ConfirmationText.question(message, before: Array(actions.prefix(i)), after: remaining, appName: appNameForConfirmations())
+                // A "yes" must always do something.
+                guard remaining.contains(where: { !ConfirmationText.isFiller($0) }) else { throw ExecutionError.emptyConfirmation(message) }
+                let before = Array(actions.prefix(i))
+                var fieldText: String?
+                if remaining.first(where: { !ConfirmationText.isFiller($0) }) == .pressReturnToSend,
+                   !before.contains(where: { if case .typeText = $0 { return true }; return false }) {
+                    fieldText = ActionExecutor.composerText()
+                }
+                let question = ConfirmationText.question(message, before: before, after: remaining, appName: appNameForConfirmations(), fieldText: fieldText)
                 return ExecutionResult(summary: summaries.joined(separator: " → "), pendingConfirmation: PendingConfirmation(message: question, actions: remaining))
             }
             let s = try perform(action, snapshot: &snap)
@@ -129,6 +140,13 @@ public final class ActionExecutor {
     }
 
     private func frontApp() -> AppInfo? { RunningApps.frontmost() }
+
+    /// Text in the focused message box, for "Send “…”?" when Sirena did not type it herself.
+    static func composerText() -> String? {
+        guard let el = AX.focusedTextElement(), ["AXTextArea", "AXTextField", "AXComboBox"].contains(el.role ?? "") || el.bool("AXEditable") == true,
+              el.role != "AXWebArea", let v = el.valueString?.trimmingCharacters(in: .whitespacesAndNewlines), !v.isEmpty, v.count <= 2000 else { return nil }
+        return v
+    }
 
     private func perform(_ action: Action, snapshot snap: inout ScreenSnapshot) throws -> String {
         Log.commands.info("perform: \(String(describing: action), privacy: .public)")

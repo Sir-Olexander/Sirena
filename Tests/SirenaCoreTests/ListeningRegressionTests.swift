@@ -143,3 +143,43 @@ final class ListeningRegressionTests: XCTestCase {
         XCTAssertEqual(UtteranceRouter.route("Como é que se chama?", context: soft), .ignore("no name"))
     }
 }
+
+/// A "yes" always does something (2026-10-27: "send", "Send message", "close close" asked questions with nothing behind them).
+final class ConfirmationTests: XCTestCase {
+    func testSendOnTheFastPath() {
+        XCTAssertEqual(FastPathParser.parse("send")?.actions, [.focusComposer, .confirmThen(message: "", actions: [.pressReturnToSend])])
+        XCTAssertEqual(FastPathParser.parse("Send message.")?.actions, [.focusComposer, .confirmThen(message: "", actions: [.pressReturnToSend])])
+        XCTAssertEqual(FastPathParser.parse("envia")?.actions, [.focusComposer, .confirmThen(message: "", actions: [.pressReturnToSend])])
+        XCTAssertEqual(FastPathParser.parse("close close")?.actions, [.pressKeys(KeyCombo("w", [.command]))])
+    }
+
+    func testEmptyConfirmationsAreRepairedOrRefused() {
+        XCTAssertEqual(ConfirmationText.emptyConfirmation(in: [.confirmThen(message: "Send this message?", actions: [])]), "Send this message?")
+        XCTAssertNil(ConfirmationText.emptyConfirmation(in: [.confirmThen(message: "Send?", actions: []), .pressKeys(KeyCombo("return"))]))
+        XCTAssertEqual(ConfirmationText.repairEmptyConfirmation([.confirmThen(message: "Send this message?", actions: [])]),
+                       [.confirmThen(message: "Send this message?", actions: [.focusComposer, .pressReturnToSend])])
+        XCTAssertEqual(ConfirmationText.repairEmptyConfirmation([.focusComposer, .typeText("hi"), .confirmThen(message: "OK?", actions: [])]),
+                       [.focusComposer, .typeText("hi"), .confirmThen(message: "OK?", actions: [.pressReturnToSend])])
+        XCTAssertNil(ConfirmationText.repairEmptyConfirmation([.confirmThen(message: "Close this window?", actions: [])]))
+    }
+
+    func testExecutorRefusesAnEmptyConfirmation() async {
+        let ex = ActionExecutor(context: ScreenContext(), numbers: NumbersMode(), inserter: .shared)
+        ex.dryRun = true
+        do {
+            _ = try await ex.execute([.confirmThen(message: "Close this window?", actions: [])], snapshot: ScreenSnapshot())
+            XCTFail("should refuse")
+        } catch let e as ExecutionError {
+            XCTAssertEqual(e, .emptyConfirmation("Close this window?"))
+        } catch { XCTFail("\(error)") }
+    }
+
+    func testSendQuestionNamesTheMessage() {
+        XCTAssertEqual(ConfirmationText.question("", before: [.focusComposer], after: [.pressReturnToSend], appName: "WhatsApp", fieldText: "see you at 5"),
+                       "Send “see you at 5” in WhatsApp?")
+        XCTAssertEqual(ConfirmationText.question("Send this message?", before: [], after: [.pressReturnToSend], appName: "WhatsApp"),
+                       "Send the message in WhatsApp?")
+        XCTAssertEqual(ConfirmationText.question("Send this message to CASA?", before: [], after: [.pressReturnToSend], appName: "WhatsApp"),
+                       "Send this message to CASA?")
+    }
+}
