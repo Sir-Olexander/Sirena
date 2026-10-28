@@ -15,6 +15,7 @@ public enum SelfTests {
         case "fallback": return await fallback()
         case "tabs": return await tabsTest()
         case "results": return await resultsTest()
+        case "dictation": return await dictationTest()
         case "finder-tabs": return await finderTabsTest()
         case "tabdump": return tabDump()
         case "finder-cleanup":
@@ -169,6 +170,28 @@ public enum SelfTests {
         lines.append("close all tabs → \(all?.summary ?? "error"); tabs left: \(afterAll?.tabs.count ?? -1) (expect 1: \(afterAll?.activeTab?.url ?? "?")), same window: \(afterAll?.windowId.map { "\($0)" } == wid)")
         _ = script("tell application \"Google Chrome\" to close window id \(wid)")
         lines.append("test window closed; Chrome windows now: \(ax.windows.count)")
+        return lines.joined(separator: "\n")
+    }
+
+    /// Dictation cleanup with the real model, dry run (nothing is typed): which chunks skip the model, how long the
+    /// others take, and whether a list continued across pauses keeps one item per line.
+    static func dictationTest() async -> String {
+        guard let key = APIKeyStore.load() else { return "no API key" }
+        let client = MetaAPIClient(apiKey: key)
+        let engine = DictationEngine(clientProvider: { client }, modelName: { "muse-spark-1.3" }, skipCleanup: { false })
+        engine.dryRun = true
+        engine.fieldText = { "" }
+        let front = RunningApps.frontmost()
+        engine.beginSession(frontApp: front)
+        var lines: [String] = []
+        for chunk in ["Ok", "um so basically the meeting is, no wait, moved to Friday", "we need to check three things one safety",
+                      "two readability", "and three, clarity", "see you there"] {
+            let t0 = Date()
+            let r = await engine.insert(raw: chunk, continuing: true, frontApp: front)
+            lines.append("“\(chunk)” → \(r.inserted.replacingOccurrences(of: "\n", with: "⏎")) [\(r.usedModel ? "model \(r.cleanupMs ?? 0) ms" : "local") · \(Int(Date().timeIntervalSince(t0) * 1000)) ms]")
+        }
+        lines.append("session text:")
+        lines += engine.sessionText.components(separatedBy: "\n").map { "  | \($0)" }
         return lines.joined(separator: "\n")
     }
 

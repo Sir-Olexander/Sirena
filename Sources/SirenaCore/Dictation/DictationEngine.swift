@@ -62,31 +62,37 @@ public final class DictationEngine {
         var usedModel = false
         var toInsert: String
 
-        if let marker = ListMarker.parse(trimmed, listActive: listCounter > 0) {
+        if let marker = ListMarker.parse(trimmed, listActive: listCounter > 0, next: listCounter > 0 ? listCounter + 1 : nil) {
             // A list item said in its own pause: own line, numbered.
             let n = marker.number ?? (listCounter + 1)
             listCounter = n
             var body = marker.rest.trimmingCharacters(in: .whitespacesAndNewlines)
             if !body.isEmpty {
-                let (cleaned, ms, model) = await clean(body, app: frontApp, hint: "This chunk is the text of list item \(n). Do not add a number or bullet.")
+                let (cleaned, ms, model) = await clean(body, app: frontApp, hint: "This chunk is the text of list item \(n). Do not add a number or bullet.", continuesSentence: false)
                 body = DictationEngine.capitalizeFirst(cleaned.replacingOccurrences(of: "^\\s*(?:\\d{1,3}[.)]|[-•*])\\s+", with: "", options: .regularExpression))
                 cleanupMs = ms; usedModel = model
             }
             let prefix = atLineStart(samePlace: samePlace) ? "" : "\n"
             toInsert = prefix + "\(n). " + body
         } else {
-            let (cleaned, ms, model) = await clean(trimmed, app: frontApp, hint: nil)
+            let listHint = listCounter > 0
+                ? "A numbered list is in progress (last item \(listCounter)). If this chunk is the next item, start it with \"\(listCounter + 1). \"."
+                : nil
+            let (cleaned, ms, model) = await clean(trimmed, app: frontApp, hint: listHint, continuesSentence: continuesSentence)
             cleanupMs = ms; usedModel = model
             var text = cleaned
             // Text of a list item whose number was said in the previous pause ("second point," … "check the monitors").
             if sessionText.firstMatch("(?:^|\\n)\\d{1,3}[.)] $") != nil { text = DictationEngine.capitalizeFirst(text) }
-            if text.firstMatch("^\\s*(?:1[.)]|[-•*])\\s") != nil, text.contains("\n") {
-                // A whole list in one breath: start it on its own line and continue the numbering.
+            if text.firstMatch("^\\s*(?:\\d{1,3}[.)]|[-•*])\\s") != nil {
+                // A list item or a whole list: always on its own line, numbering continued, item capitalized.
+                text = DictationEngine.capitalizeListItem(text.replacingOccurrences(of: "^[ \\t]+", with: "", options: .regularExpression))
                 if !atLineStart(samePlace: samePlace) { text = "\n" + text }
                 if let last = ListMarker.lastNumber(in: text) { listCounter = last }
                 toInsert = text
             } else {
                 let needsSpace = samePlace && !lastChunkEndedWithWhitespace && !(text.first.map { ".,!?;:)".contains($0) } ?? false)
+                // A list that starts inside the chunk ("three things:\n1. Safety"): items capitalized, later pauses continue it.
+                if let last = ListMarker.lastNumber(in: text) { listCounter = last; text = DictationEngine.capitalizeListItem(text) }
                 toInsert = (needsSpace ? " " : "") + text
             }
         }
@@ -107,8 +113,22 @@ public final class DictationEngine {
         return true
     }
 
-    private func clean(_ raw: String, app: AppInfo?, hint: String?) async -> (String, Int?, Bool) {
+    /// Whether the next chunk continues a sentence of this session (no capital, no repeated words).
+    private var continuesSentence: Bool {
+        let t = sessionText.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
+        guard let last = t.last else { return false }
+        return !".!?:;\n".contains(last) && t.firstMatch("(?:^|\\n)\\d{1,3}[.)]$") == nil
+    }
+
+    private func clean(_ raw: String, app: AppInfo?, hint: String?, continuesSentence: Bool) async -> (String, Int?, Bool) {
         guard !skipCleanup(), let client = clientProvider() else { return (DictationEngine.localCleanup(raw), nil, false) }
+        // Short chunks with nothing to fix ("Ok", "see you there") need no model: instant, no tokens.
+        if DictationEngine.isCleanChunk(raw) {
+            let chat = FastPathParser.chatApps.contains { (app?.name.lowercased() ?? "").contains($0) }
+            // List items carry no final period, like the model writes them.
+            let listItem = hint?.hasPrefix("This chunk is the text of list item") ?? false
+            return (DictationEngine.localCleanup(raw, continuesSentence: continuesSentence, chatStyle: chat || listItem), nil, false)
+        }
         let t0 = Date()
         let cleaned = await cleanup(raw, app: app, client: client, hint: hint)
         let ms = Int(Date().timeIntervalSince(t0) * 1000)
@@ -170,7 +190,7 @@ public final class DictationEngine {
         var user = "Destination app: \(app?.name ?? "unknown") — \(style)."
         let context = String(sessionText.suffix(240))
         if !context.isEmpty { user += "\nText already inserted before this chunk (context only, never repeat it): «\(context)»" }
-        if let hint { user += "\n\(hint) Start with a capital letter." }
+        if let hint { user += "\n\(hint)" + (hint.hasPrefix("This chunk is the text of list item") ? " Start with a capital letter." : "") }
         user += "\nDictated: \(raw)"
         let req = ChatRequest(model: modelName(), messages: [.system(DictationEngine.systemPrompt), .user(user)],
                               reasoning_effort: client.isLocal ? nil : "minimal", max_tokens: 1200, prompt_cache_key: "sirena-dictation")
@@ -184,6 +204,60 @@ public final class DictationEngine {
             return nil
         }
     }
+
+    /// "2. readability" → "2. Readability", on every list line of the chunk.
+    static func capitalizeListItem(_ s: String) -> String {
+        s.components(separatedBy: "\n").map { line -> String in
+            guard let m = line.firstMatch("^(\\s*(?:\\d{1,3}[.)]|[-•*])\\s+)") else { return line }
+            return m[1] + capitalizeFirst(String(line.dropFirst(m[1].count)))
+        }.joined(separator: "\n")
+    }
+
+    static let fillerPattern = "\\b(?:um+|uh+|uhm+|erm+|er|ah+|hmm+|mm+|like|you know|i mean|sort of|kind of|basically|actually|literally|"
+        + "no wait|wait no|scratch that|i meant|or rather|sorry|tipo|pronto|então|hum+|quer dizer|ou seja|aliás|alias|não espera|digo)\\b"
+    static let spokenFormatting = "\\b(?:comma|period|full stop|question mark|exclamation (?:mark|point)|colon|semicolon|new line|newline|new paragraph|"
+        + "next line|line break|open quote|close quote|quote|unquote|dash|hyphen|bullet|asterisk|open (?:bracket|paren)|close (?:bracket|paren)|"
+        + "vírgula|virgula|ponto final|ponto de interrogação|ponto de exclamação|dois pontos|nova linha|novo parágrafo|parágrafo|aspas|travessão)\\b"
+    static let numberWords = "\\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|"
+        + "eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|first|second|third|fourth|fifth|"
+        + "um|uma|dois|duas|três|tres|quatro|cinco|seis|sete|oito|nove|dez|vinte|trinta|cem|cento|mil|primeiro|segundo|terceiro)\\b"
+
+    /// Nothing for the model to do: short, no fillers or self-corrections, no spoken punctuation or formatting,
+    /// no numbers said as words, no enumeration.
+    public static func isCleanChunk(_ raw: String) -> Bool {
+        let t = WakeWord.normalize(raw)
+        let words = t.split(separator: " ")
+        guard !words.isEmpty, words.count <= 12 else { return false }
+        if t.firstMatch(fillerPattern) != nil || t.firstMatch(spokenFormatting) != nil || t.firstMatch(numberWords) != nil { return false }
+        // Repeated words ("the the") are recognition slips the model fixes.
+        for (a, b) in zip(words, words.dropFirst()) where a == b { return false }
+        return true
+    }
+
+    /// Instant cleanup of a clean chunk: keeps the recognizer's own punctuation; continues a sentence in lower
+    /// case; a final period except in chat apps.
+    public static func localCleanup(_ raw: String, continuesSentence: Bool, chatStyle: Bool) -> String {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        s = s.replacingOccurrences(of: "\\s{2,}", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "\\s+([,.!?;:])", with: "$1", options: .regularExpression)
+        guard let first = s.first else { return s }
+        if continuesSentence {
+            // "And then we left" after "We met at noon" → "and then we left" (only plain words, never names or "I").
+            let firstWord = String(s.prefix { $0.isLetter || $0 == "'" })
+            if continuationWords.contains(firstWord.lowercased()), firstWord != "I", firstWord.first?.isUppercase == true {
+                s = firstWord.lowercased() + s.dropFirst(firstWord.count)
+            }
+        } else if first.isLetter {
+            s = first.uppercased() + s.dropFirst()
+        }
+        if !chatStyle, let l = s.last, l.isLetter || l.isNumber { s += "." }
+        return s
+    }
+
+    static let continuationWords: Set<String> = ["the", "a", "an", "and", "but", "so", "or", "then", "to", "for", "with", "in", "on", "at",
+                                                 "of", "it", "this", "that", "we", "you", "they", "he", "she", "my", "our", "your", "is",
+                                                 "are", "was", "were", "will", "can", "because", "which", "who", "when", "if", "as", "from",
+                                                 "e", "mas", "ou", "que", "para", "com", "de", "do", "da", "no", "na", "em", "porque", "o", "os", "as"]
 
     static func capitalizeFirst(_ s: String) -> String {
         guard let i = s.firstIndex(where: { $0.isLetter }), s[s.startIndex..<i].allSatisfy({ !$0.isLetter && !$0.isNumber }) else { return s }

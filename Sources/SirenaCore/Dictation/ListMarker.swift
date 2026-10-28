@@ -22,7 +22,9 @@ public struct ListMarker: Equatable {
     static let nouns = "(?:point|item|thing|step|bullet|idea|issue|task|question|reason|option|topic|note|ponto|item|passo|t[óo]pico|quest[ãa]o|tarefa|ideia)"
     static let tail = "\\b[\\s,.:;\\-–—]*(.*)$"
 
-    public static func parse(_ raw: String, listActive: Bool) -> ListMarker? {
+    /// - Parameter next: the number the next item of an active list would get; a bare number that matches it
+    ///   ("two, readability" after item 1) starts that item.
+    public static func parse(_ raw: String, listActive: Bool, next: Int? = nil) -> ListMarker? {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let lead = "^\\s*(?:(?:and|e|so|then|ok|okay|now|um|uh)[,\\s]+)?(?:(?:the|o|a)\\s+)?"
         func num(_ w: String) -> Int? {
@@ -52,6 +54,11 @@ public struct ListMarker: Equatable {
             }
             // bare ordinal followed by a comma: "second, …", "terceiro: …"
             if let m = text.firstMatch("^\\s*(\\S+?)[,:]\\s*(.*)$"), let n = ordinals[m[1].lowercased()] {
+                return ListMarker(number: n, rest: m[2])
+            }
+            // the next number on its own: "two, readability", "2. readability", "dois legibilidade"
+            if let next, let m = text.firstMatch("^\\s*(?:(?:and|e|then|so|now|ok|okay|depois)[,\\s]+)?(\\S+?)[,:.)]?\\s+(\\S.*)$"),
+               let n = num(m[1].trimmingCharacters(in: .punctuationCharacters)), n == next {
                 return ListMarker(number: n, rest: m[2])
             }
         }

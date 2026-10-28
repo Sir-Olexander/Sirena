@@ -285,3 +285,53 @@ final class ResultLinkTests: XCTestCase {
         XCTAssertEqual(scrolled.map(\.title), ["Result two on screen", "Result three below", "Result four below"])
     }
 }
+
+/// Dictation cleanup averaged 1.3 s even for "Ok"; a list continued in a later pause stuck to the previous line.
+final class DictationSpeedTests: XCTestCase {
+    func testCleanChunks() {
+        XCTAssertTrue(DictationEngine.isCleanChunk("Ok"))
+        XCTAssertTrue(DictationEngine.isCleanChunk("the meeting moved to Friday"))
+        XCTAssertTrue(DictationEngine.isCleanChunk("Can Sirena see both screens?"))
+        XCTAssertFalse(DictationEngine.isCleanChunk("um so basically the meeting is moved"))
+        XCTAssertFalse(DictationEngine.isCleanChunk("no wait I mean Friday"))
+        XCTAssertFalse(DictationEngine.isCleanChunk("see you at five"))
+        XCTAssertFalse(DictationEngine.isCleanChunk("send me the report question mark"))
+        XCTAssertFalse(DictationEngine.isCleanChunk("we need three things first the budget"))
+        XCTAssertFalse(DictationEngine.isCleanChunk("the the report"))
+        XCTAssertFalse(DictationEngine.isCleanChunk(String(repeating: "word ", count: 13)))
+    }
+
+    func testLocalCleanupInContext() {
+        XCTAssertEqual(DictationEngine.localCleanup("ok", continuesSentence: false, chatStyle: true), "Ok")
+        XCTAssertEqual(DictationEngine.localCleanup("the meeting moved", continuesSentence: false, chatStyle: false), "The meeting moved.")
+        XCTAssertEqual(DictationEngine.localCleanup("And then we left", continuesSentence: true, chatStyle: false), "and then we left.")
+        XCTAssertEqual(DictationEngine.localCleanup("Friday works", continuesSentence: true, chatStyle: false), "Friday works.")
+        XCTAssertEqual(DictationEngine.localCleanup("Is it ready?", continuesSentence: false, chatStyle: false), "Is it ready?")
+    }
+
+    func testCleanChunkNeverCallsTheModel() async {
+        let client = MetaAPIClient(baseURL: URL(string: "http://127.0.0.1:9")!, apiKey: "unused")
+        let engine = DictationEngine(clientProvider: { client }, modelName: { "muse-spark-1.3" }, skipCleanup: { false })
+        engine.dryRun = true
+        engine.fieldText = { "" }
+        engine.beginSession(frontApp: nil)
+        let r = await engine.insert(raw: "Ok", continuing: true, frontApp: nil)
+        XCTAssertFalse(r.usedModel)
+        XCTAssertNil(r.cleanupMs)
+        XCTAssertEqual(r.inserted, "Ok.")
+    }
+
+    func testListContinuedInALaterPause() async {
+        let engine = DictationEngine(clientProvider: { nil }, modelName: { "" }, skipCleanup: { true })
+        engine.dryRun = true
+        engine.fieldText = { "" }
+        engine.beginSession(frontApp: nil)
+        _ = await engine.insert(raw: "1. Safety", continuing: true, frontApp: nil)
+        let b = await engine.insert(raw: "2. readability", continuing: true, frontApp: nil)
+        let c = await engine.insert(raw: "three, clarity", continuing: true, frontApp: nil)
+        XCTAssertEqual(b.inserted, "\n2. Readability.")
+        XCTAssertEqual(c.inserted, "\n3. Clarity.")
+        XCTAssertEqual(engine.sessionText, "1. Safety.\n2. Readability.\n3. Clarity.")
+        XCTAssertEqual(DictationEngine.capitalizeListItem("\n2. readability"), "\n2. Readability")
+    }
+}
