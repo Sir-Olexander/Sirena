@@ -14,6 +14,16 @@ public enum SelfTests {
         case "mics": return mics()
         case "fallback": return await fallback()
         case "tabs": return await tabsTest()
+        case "results": return await resultsTest()
+        case "dictation": return await dictationTest()
+        case "speculation": return await speculationTest()
+        case "echo": return await echoTest(args: args)
+        case "players":
+            return OtherAudio.players().map { p in
+                "\(p.name) (pid \(p.pid)): " + OtherAudio.outputDevices(of: p).map { d in "\(d.name) [\(d.reachesMicrophone ? "loudspeaker" : "headphones")]" }.joined(separator: ", ")
+            }.joined(separator: "\n") + "\ndefault output: \(OtherAudio.defaultOutput.name)"
+        case "echo-sim": return await echoSimulationTest()
+        case "echo-replay": return (await replayReport(URL(fileURLWithPath: args.first ?? "/tmp/sirena-echo"))).joined(separator: "\n")
         case "finder-tabs": return await finderTabsTest()
         case "tabdump": return tabDump()
         case "finder-cleanup":
@@ -143,8 +153,265 @@ public enum SelfTests {
         let others = try? await executor.execute([.closeTabs(.allExcept(.last))], snapshot: nil)
         let info = BrowserControl.info(for: chrome)
         lines.append("close all tabs but the last one → \(others?.summary ?? "error"); tabs left: \(info?.tabs.count ?? -1) (expect 1), active \(info?.activeIndex ?? -1)")
+        // Switching by position in one AppleScript call, in the window the user sees.
+        _ = script("""
+            tell application "Google Chrome"
+                set w to window id \(wid)
+                repeat with k from 2 to 4
+                    make new tab at end of tabs of w with properties {URL:"about:blank#s" & k}
+                end repeat
+                set active tab index of w to 1
+            end tell
+            """)
+        usleep(400_000)
+        lines.append("window seen by tab commands: \(BrowserControl.info(for: chrome).map { "id \($0.windowId ?? -1) (test window \(wid)), \($0.tabs.count) tabs, other windows \($0.otherWindows)" } ?? "none")")
+        for (label, target, expect) in [("tab 3", TabTarget.index(3), "3"), ("next tab", .next, "4"), ("previous tab", .previous, "3"), ("last tab", .last, "4"),
+                                        ("first tab", .first, "1"), ("tab 9", .index(9), "error")] {
+            let t0 = Date()
+            var result: String
+            do { result = try await executor.execute([.switchTab(target)], snapshot: nil).summary } catch { result = "error: \(error.localizedDescription)" }
+            let ms = Int(Date().timeIntervalSince(t0) * 1000)
+            lines.append("\(label) → \(result) in \(ms) ms; active now \(BrowserControl.info(for: chrome)?.activeIndex ?? -1) (expect \(expect))")
+        }
+        let all = try? await executor.execute([.closeTabs(.all)], snapshot: nil)
+        let afterAll = BrowserControl.info(for: chrome)
+        lines.append("close all tabs → \(all?.summary ?? "error"); tabs left: \(afterAll?.tabs.count ?? -1) (expect 1: \(afterAll?.activeTab?.url ?? "?")), same window: \(afterAll?.windowId.map { "\($0)" } == wid)")
         _ = script("tell application \"Google Chrome\" to close window id \(wid)")
         lines.append("test window closed; Chrome windows now: \(ax.windows.count)")
+        return lines.joined(separator: "\n")
+    }
+
+    /// Real acoustics for the echo gate. Another process (`say`) reads a sentence through the speakers, like a video;
+    /// meanwhile this process says "Sirena, scroll down" (left out of the reference, so for the gate it is the user
+    /// talking over the video). Records the microphone and the Mac's own sound to /tmp/sirena-echo, then reports what
+    /// the recognizer hears with and without the gate. `echo vp` records with voice processing on.
+    static func echoTest(args: [String] = []) async -> String {
+        var lines: [String] = []
+        let output = OtherAudio.defaultOutput
+        lines.append("output: \(output.name)\(output.builtIn ? " (built-in speakers)" : ""); default input: \(AudioDevices.defaultInput?.name ?? "none")")
+        lines.append("Screen Recording permitted: \(SystemAudioTap.isPermitted)")
+        let rec = EchoRecording()
+        let tap = SystemAudioTap()
+        tap.onSamples = { s, t in rec.addReference(s, time: t) }
+        let cap = AudioCapture()
+        if let builtIn = AudioDevices.inputs().first(where: { $0.isBuiltIn }) { cap.preferredDeviceUID = builtIn.uid }
+        // Without voice processing by default: what Sirena records after its silence watchdog turns it off.
+        cap.voiceProcessing = args.contains("vp")
+        cap.onTimedChunk = { pcm, t in rec.addMic(pcm, time: t) }
+        // Like the app: the capture engine starts on the main thread.
+        do { try await MainActor.run { try cap.start() } } catch { return (lines + ["microphone: \(error.localizedDescription)"]).joined(separator: "\n") }
+        lines.append("microphone: \(cap.inputDescription)")
+        do { try await tap.start() } catch { await MainActor.run { cap.stop() }; return (lines + ["system audio: \(error.localizedDescription)"]).joined(separator: "\n") }
+        // "The user": rendered to a file now (nothing plays), played later by this process.
+        let userFile = URL(fileURLWithPath: "/tmp/sirena-echo-user.aiff")
+        let render = Process()
+        render.executableURL = URL(fileURLWithPath: "/usr/bin/say")
+        render.arguments = ["-v", "Daniel", "-o", userFile.path, "Sirena, scroll down."]
+        try? render.run()
+        render.waitUntilExit()
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        let say = Process()
+        say.executableURL = URL(fileURLWithPath: "/usr/bin/say")
+        // The "video" plays quieter than the "user" speaks (a person near the Mac over a video in the background).
+        say.arguments = ["-v", "Samantha", "[[volm 0.35]] This is a short sound check. Please switch to the second tab, then scroll down and open the first link. Thank you, that is all for now."]
+        try? say.run()
+        try? await Task.sleep(nanoseconds: 3_500_000_000)
+        // "The user" talks over it: this process's sound is not in the reference.
+        let player = try? AVAudioPlayer(contentsOf: userFile)
+        player?.volume = 1
+        player?.play()
+        lines.append("user voice: \(player.map { String(format: "%.1f s", $0.duration) } ?? "could not play")")
+        lines.append("playing during the test: \(OtherAudio.players().map(\.name).joined(separator: ", "))")
+        // Wait without blocking the main thread (the speech synthesizer plays from it).
+        while say.isRunning || (player?.isPlaying ?? false) { try? await Task.sleep(nanoseconds: 100_000_000) }
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        await MainActor.run { cap.stop() }
+        tap.stop()
+        let dir = URL(fileURLWithPath: "/tmp/sirena-echo")
+        rec.save(to: dir)
+        lines.append("recorded to \(dir.path): \(rec.summary)")
+        // As in the app: built-in speakers into the built-in microphone start from the coupling measured before.
+        lines += await replayReport(dir, seed: output.builtIn ? .builtInSpeakersAndMic : nil)
+        return lines.joined(separator: "\n")
+    }
+
+    /// Simulated music on the Mac (nothing is played) with the user's "Sirena, scroll down" at several levels under
+    /// the music's echo: what the recognizer gets with and without the echo canceller and gate.
+    static func echoSimulationTest() async -> String {
+        guard let key = APIKeyStore.load() else { return "no API key" }
+        let client = MetaAPIClient(apiKey: key)
+        var lines: [String] = []
+        for v in [nil, -12, -6] as [Float?] {
+            guard let scene = EchoSimulation.make(voiceOverEchoDB: v, echoDBFS: -27) else { return "no music file" }
+            let gate = EchoGate()
+            let gated = scene.recording.replay(through: gate)
+            let raw = (try? await client.transcribe(wav: WAV.wrap(pcm: scene.recording.micPCM), keywords: ["Sirena"])) ?? "(error)"
+            let clean = (try? await client.transcribe(wav: WAV.wrap(pcm: gated.pcm), keywords: ["Sirena"])) ?? "(error)"
+            lines.append(v.map { String(format: "user %.0f dB under the music's echo:", -$0) } ?? "music alone:")
+            lines.append("  without: “\(raw)”")
+            lines.append("  with:    “\(clean)”   (cancelled \(String(format: "%.0f", gate.cancellationDB)) dB)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Runs a recording made by `echoTest` through a fresh echo gate and transcribes it with and without the gate.
+    static func replayReport(_ dir: URL, seed: EchoGate.Learned? = nil) async -> [String] {
+        guard let rec = EchoRecording.load(from: dir) else { return ["no recording in \(dir.path)"] }
+        func makeGate() -> EchoGate { let g = EchoGate(); if let seed { g.seed(seed) }; return g }
+        let gate = makeGate()
+        let gated = rec.replay(through: gate)
+        var lines = ["gate: delay \(gate.delayFrames * 10) ms, \(gate.gatedChunks) chunks silenced, \(gate.passedChunks) passed while sound played; coupling \(gate.learnedCoupling.map { $0.map { String(format: "%.0f", $0) }.joined(separator: " ") } ?? "not learned")"]
+        lines.append("timeline (each mark 80 ms; ▮ sent, · silenced, ─ no reference):")
+        lines.append("  " + gated.marks)
+        guard let key = APIKeyStore.load() else { return lines + ["no API key: transcripts skipped"] }
+        let client = MetaAPIClient(apiKey: key)
+        let rawText = (try? await client.transcribe(wav: WAV.wrap(pcm: rec.micPCM), keywords: ["Sirena"])) ?? "(error)"
+        let gatedText = (try? await client.transcribe(wav: WAV.wrap(pcm: gated.pcm), keywords: ["Sirena"])) ?? "(error)"
+        lines.append("recognizer without the gate: “\(rawText)”")
+        lines.append("recognizer with the gate: “\(gatedText)”")
+        // The user talking over the playback: their line mixed into the microphone at known levels.
+        if let voice = EchoRecording.samples(of: URL(fileURLWithPath: "/tmp/sirena-echo-user.aiff")) {
+            for dB in [6, 10] as [Float] {
+                let mixed = rec.mixingVoice(voice, at: 5 * Int(EchoGate.sampleRate), overEchoDB: dB)
+                let raw = (try? await client.transcribe(wav: WAV.wrap(pcm: mixed.micPCM), keywords: ["Sirena"])) ?? "(error)"
+                let g = mixed.replay(through: makeGate())
+                let text = (try? await client.transcribe(wav: WAV.wrap(pcm: g.pcm), keywords: ["Sirena"])) ?? "(error)"
+                lines.append("user “Sirena, scroll down” \(Int(dB)) dB over the playback:")
+                lines.append("  without the gate: “\(raw)”")
+                lines.append("  with the gate:    “\(text)”   \(g.marks)")
+            }
+        }
+        return lines
+    }
+
+    /// Time from the final transcript to the end of a model command, with and without the work started when
+    /// speech ended (snapshot + first model call). Simulated input, dry-run executor: nothing acts on the Mac.
+    static func speculationTest() async -> String {
+        guard let key = APIKeyStore.load() else { return "no API key" }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sirena-speculation-test")
+        try? FileManager.default.removeItem(at: dir)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let client = MetaAPIClient(apiKey: key)
+        let history = HistoryLog(directory: dir)
+        let (controller, pipeline): (ListeningController, CommandPipeline) = await MainActor.run {
+            let settings = Settings(defaults: UserDefaults(suiteName: "sirena-selftest") ?? .standard)
+            let context = ScreenContext(), numbers = NumbersMode(), overlay = OverlayModel()
+            let executor = ActionExecutor(context: context, numbers: numbers, inserter: .shared)
+            executor.dryRun = true
+            let planner = ModelCommandPlanner(clientProvider: { client }, modelName: { "muse-spark-1.3" })
+            let pipeline = CommandPipeline(context: context, executor: executor, planner: planner,
+                                           computerUse: ComputerUseAgent(clientProvider: { nil }, modelName: { "" }), overlay: overlay,
+                                           history: history, settings: settings, shortcuts: ShortcutBook(directory: dir), notes: NotesStore(directory: dir))
+            let dictation = DictationEngine(clientProvider: { client }, modelName: { "muse-spark-1.3" }, skipCleanup: { false })
+            dictation.dryRun = true
+            let controller = ListeningController(settings: settings, overlay: overlay, context: context, pipeline: pipeline, dictation: dictation,
+                                                 transcriber: RealtimeTranscriber(apiKey: nil), audio: AudioCapture(), fallback: nil, history: history, numbers: numbers)
+            controller.simulateInput = true
+            controller.turnOn()
+            return (controller, pipeline)
+        }
+        var lines: [String] = []
+        var turn = 100
+        func utter(_ text: String, early: Bool) async -> Int {
+            turn += 1
+            let t = turn
+            await MainActor.run {
+                controller.inject(.speechStart(turnId: t))
+                controller.inject(.partial(text: text))
+                if early { controller.inject(.speechEnd(turnId: t)) }
+            }
+            try? await Task.sleep(nanoseconds: 800_000_000)   // the recognizer's usual wait for the final text
+            let before = history.recent(500).count
+            let t0 = Date()
+            await MainActor.run { controller.inject(.final(text: text, turnId: t, asrLatencyMs: 800)) }
+            while history.recent(500).count == before, Date().timeIntervalSince(t0) < 30 { try? await Task.sleep(nanoseconds: 20_000_000) }
+            return Int(Date().timeIntervalSince(t0) * 1000)
+        }
+        var plain: [Int] = [], early: [Int] = []
+        for (i, country) in ["Italy", "Spain", "Japan", "Brazil", "Kenya", "Canada"].enumerated() {
+            let ms = await utter("Sirena, what is the capital of \(country)?", early: i % 2 == 1)
+            if i % 2 == 1 { early.append(ms) } else { plain.append(ms) }
+            lines.append("\(i % 2 == 1 ? "early start" : "no early start"): capital of \(country) → \(ms) ms after the final text")
+            _ = pipeline
+        }
+        let avg = { (a: [Int]) in a.isEmpty ? 0 : a.reduce(0, +) / a.count }
+        lines.append("average after the final text: without \(avg(plain)) ms, with the early start \(avg(early)) ms")
+        for e in history.recent(20) where e.route == "command" { lines.append("  \(e.utterance) → \(e.result ?? "") [\(e.latency?.summary ?? "")]") }
+        await MainActor.run { controller.turnOff() }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Dictation cleanup with the real model, dry run (nothing is typed): which chunks skip the model, how long the
+    /// others take, and whether a list continued across pauses keeps one item per line.
+    static func dictationTest() async -> String {
+        guard let key = APIKeyStore.load() else { return "no API key" }
+        let client = MetaAPIClient(apiKey: key)
+        let engine = DictationEngine(clientProvider: { client }, modelName: { "muse-spark-1.3" }, skipCleanup: { false })
+        engine.dryRun = true
+        engine.fieldText = { "" }
+        let front = RunningApps.frontmost()
+        engine.beginSession(frontApp: front)
+        var lines: [String] = []
+        for chunk in ["Ok", "um so basically the meeting is, no wait, moved to Friday", "we need to check three things one safety",
+                      "two readability", "and three, clarity", "see you there"] {
+            let t0 = Date()
+            let r = await engine.insert(raw: chunk, continuing: true, frontApp: front)
+            lines.append("“\(chunk)” → \(r.inserted.replacingOccurrences(of: "\n", with: "⏎")) [\(r.usedModel ? "model \(r.cleanupMs ?? 0) ms" : "local") · \(Int(Date().timeIntervalSince(t0) * 1000)) ms]")
+        }
+        lines.append("session text:")
+        lines += engine.sessionText.components(separatedBy: "\n").map { "  | \($0)" }
+        return lines.joined(separator: "\n")
+    }
+
+    /// A temporary Chrome window with a search results page: what "the first / second result" would open.
+    static func resultsTest() async -> String {
+        guard let chrome = RunningApps.list().first(where: { $0.bundleId == "com.google.Chrome" }) else { return "Chrome is not running" }
+        var lines: [String] = []
+        guard let wid = BrowserControl.run("""
+            tell application "Google Chrome"
+                set w to make new window
+                set URL of active tab of w to "https://www.google.com/search?q=Arthur+Morgan+Red+Dead"
+                return (id of w) as text
+            end tell
+            """, timeout: 5) else { return "could not open the test window (Automation permission?)" }
+        RunningApps.activate(chrome)
+        var links: [PageLink] = []
+        let t0 = Date()
+        for _ in 0..<24 {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            links = PageLinks.links(pid: chrome.pid)
+            if links.count >= 4 { break }
+        }
+        let t1 = Date()
+        _ = PageLinks.links(pid: chrome.pid)
+        lines.append("results page: \(links.count) links after \(Int(t1.timeIntervalSince(t0) * 1000)) ms; one more read took \(Int(Date().timeIntervalSince(t1) * 1000)) ms")
+        for (i, l) in links.prefix(6).enumerated() {
+            lines.append("  \(i + 1). \(l.title.prefix(70))\(l.isHeadingLink ? "" : " (no heading)") — \(l.url?.prefix(60) ?? "?")")
+        }
+        lines.append("skip links in the list: \(links.filter { PageLinks.isSkipLink($0.title) }.count) (expect 0)")
+        // Every link of the page, to see what the filter dropped.
+        if let win = AX.frontWindow(pid: chrome.pid), let web = TextExtractor.findFirst(in: win, maxVisited: 4000, where: { $0.role == "AXWebArea" }) {
+            var all: [String] = []
+            var queue = [web]; var head = 0
+            while head < queue.count, head < 8000 {
+                let el = queue[head]; head += 1
+                if el.role == "AXLink" {
+                    if all.count < 40 { all.append("    link “\(el.label.prefix(50))” heading=\(PageLinks.findHeading(in: el) != nil) parentHeading=\(el.parent?.role == "AXHeading") y=\(Int(el.frame?.minY ?? -1))") }
+                    continue
+                }
+                queue += el.children
+            }
+            lines.append("first 40 links of the page:")
+            lines += all
+        }
+        let executor = ActionExecutor(context: ScreenContext(), numbers: NumbersMode(), inserter: .shared)
+        let before = BrowserControl.info(for: chrome)?.activeTab?.url ?? ""
+        let r = try? await executor.execute([.openResult(2)], snapshot: nil)
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        let after = BrowserControl.info(for: chrome)?.activeTab?.url ?? ""
+        lines.append("open the second result → \(r?.summary ?? "error"); page changed: \(after != before) (\(after.prefix(70)))")
+        _ = BrowserControl.run("tell application \"Google Chrome\" to close window id \(wid)", timeout: 5)
+        lines.append("test window closed")
         return lines.joined(separator: "\n")
     }
 

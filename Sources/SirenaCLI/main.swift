@@ -263,6 +263,19 @@ case "render-overlay":
     render("8-screen-active", screen: "A") { m in m.setState(.awake); m.setScreenCount(2); m.setActiveScreen("A"); m.setFrontApp(name: "Google Chrome", icon: icon); m.showWorking("Moved Google Chrome to screen 2", autoClear: 60) }
     render("9-screen-inactive", screen: "B") { m in m.setState(.awake); m.setScreenCount(2); m.setActiveScreen("A"); m.setFrontApp(name: "Google Chrome", icon: icon); m.showWorking("Moved Google Chrome to screen 2", autoClear: 60) }
 
+case "echo-bench":
+    // sirena-cli echo-bench   — simulated music + voice through the echo canceller and gate: speed and result
+    for v in [nil, -12, -6] as [Float?] {
+        guard let scene = EchoSimulation.make(voiceOverEchoDB: v, echoDBFS: -27) else { print("no music file"); exit(1) }
+        let gate = EchoGate()
+        let t0 = Date()
+        let sent = scene.recording.replay(through: gate).sent
+        let secs = Date().timeIntervalSince(t0)
+        let r = EchoSimulation.score(sent, voiceRange: scene.voiceRange)
+        print(String(format: "voice %@: 16 s of audio in %.2f s (%.1f%% of one core), music leaked %.1f%%, voice passed %.0f%%, cancelled %.1f dB",
+                     v.map { String(format: "%+.0f dB", $0) } ?? "none", secs, secs / 16 * 100, r.leak * 100, r.voice * 100, gate.cancellationDB))
+    }
+
 case "render-windows":
     // sirena-cli render-windows <dir>   — renders the dev panel, suggestions, shortcut book and notes windows with sample data
     _ = NSApplication.shared
@@ -275,7 +288,9 @@ case "simulate":
     let overlay = OverlayModel()
     let context = ScreenContext()
     let numbers = NumbersMode()
-    let client = metaClient()
+    // Without a key the simulation still runs: model-bound commands then report the missing key.
+    let client: MetaAPIClient? = APIKeyStore.load().map { MetaAPIClient(apiKey: $0) }
+    if client == nil { print("(no API key: commands that need the model will report it)") }
     let executor = ActionExecutor(context: context, numbers: numbers, inserter: TextInserter.shared)
     executor.dryRun = true
     executor.textEditHandler = { instruction in
@@ -294,7 +309,8 @@ case "simulate":
                                          transcriber: transcriber, audio: AudioCapture(), fallback: nil, history: HistoryLog(directory: URL(fileURLWithPath: "/tmp/sirena-sim")), numbers: numbers)
     controller.simulateInput = true
     let script: [(Double, String)] = positional.isEmpty ? [
-        (0.0, "Sirena, switch to Chrome"), (1.0, "go to the first tab"), (1.0, "scroll down"), (8.0, "switch to Slack"),
+        (0.0, "Sirena, switch to Chrome"), (1.0, "go to the first tab"), (1.0, "scroll down"), (1.0, "so how was the meeting yesterday"),
+        (8.0, "switch to Slack"),
         (0.5, "Sirena, send a message to Claude saying summarize the page I just read"), (2.0, "yes"),
         (1.0, "Sirena, start dictating"), (1.0, "um so basically the meeting is moved to Friday"), (1.0, "Sirena, stop"),
         (1.0, "Sirena, wait"), (1.0, "Sirena, scroll down"), (1.0, "Hey Sirena"), (1.0, "Sirena, stop listening"),

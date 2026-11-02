@@ -29,6 +29,8 @@ public enum ScrollAmount: String, Codable { case small, medium, large, page }
 /// Which tabs "close tabs …" closes, relative to the tab list of the front browser window.
 public enum TabSet: Equatable, Codable {
     case right, left, others
+    /// "close all tabs": every tab of the window; one new, empty tab stays.
+    case all
     /// "close all tabs but the first one": keep one tab, close the rest.
     case allExcept(TabTarget)
 }
@@ -58,6 +60,9 @@ public indirect enum Action: Equatable, Codable {
     case clickElement(String)
     case clickNumber(Int)
     case focusElement(String)
+    /// An element of the screen snapshot the model saw, by its id there (label as a fallback).
+    case clickId(Int, label: String?)
+    case focusId(Int, label: String?)
     /// Focus the message composer / main text input of the front window.
     case focusComposer
     case typeText(String)
@@ -94,13 +99,17 @@ public indirect enum Action: Equatable, Codable {
     /// Copy / select / read a piece of the text on screen ("copy the first paragraph").
     case copyText(TextQuery), selectText(TextQuery), readText(TextQuery)
     case openNotesWindow, openShortcutsWindow, openHistoryWindow
+    /// "again", "more": run the last fast-path command once more.
+    case repeatLast
+    /// "open the first result", "the second one": the Nth link of the page's main content (-1 = last).
+    case openResult(Int)
 
     /// Control actions are handled by the listening controller, not the executor.
     public var isControl: Bool {
         switch self {
         case .wait, .turnOff, .startDictation, .stopDictation, .showNumbers, .hideNumbers, .undo, .cancel, .newLine, .deleteLastChunk, .say,
              .readSelection, .readArticle, .readPage, .readingControl, .forgetLearnedShortcut,
-             .openNotesWindow, .openShortcutsWindow, .openHistoryWindow, .readText:
+             .openNotesWindow, .openShortcutsWindow, .openHistoryWindow, .readText, .repeatLast:
             return true
         default:
             return false
@@ -144,6 +153,7 @@ public indirect enum Action: Equatable, Codable {
             case .right: return "Closing the tabs to the right"
             case .left: return "Closing the tabs to the left"
             case .others: return "Closing the other tabs"
+            case .all: return "Closing all tabs"
             case .allExcept: return "Closing all tabs but one"
             }
         case .newTab: return "New tab"
@@ -157,6 +167,8 @@ public indirect enum Action: Equatable, Codable {
         case .scrollTo(let top): return top ? "Scrolling to top" : "Scrolling to bottom"
         case .clickElement(let s): return "Clicking “\(s)”"
         case .clickNumber(let n): return "Clicking \(n)"
+        case .clickId(let n, let l): return l.map { "Clicking “\($0)”" } ?? "Clicking element \(n)"
+        case .focusId(let n, let l): return l.map { "Focusing “\($0)”" } ?? "Focusing element \(n)"
         case .focusElement(let s): return "Focusing “\(s)”"
         case .focusComposer: return "Focusing the message box"
         case .typeText(let t): return "Typing “\(t.prefix(40))\(t.count > 40 ? "…" : "")”"
@@ -198,6 +210,8 @@ public indirect enum Action: Equatable, Codable {
         case .copyText(let q): return "Copying \(q.spoken)"
         case .selectText(let q): return "Selecting \(q.spoken)"
         case .readText(let q): return "Reading \(q.spoken)"
+        case .repeatLast: return "Again"
+        case .openResult(let n): return n == -1 ? "Opening the last result" : "Opening result \(n)"
         }
     }
 }

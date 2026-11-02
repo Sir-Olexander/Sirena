@@ -13,14 +13,18 @@ public struct RouterContext: Equatable {
     public var isReading: Bool
     /// The screenshot fallback is working: only "cancel" / "stop" (and confirmation answers) get through.
     public var screenAgentBusy: Bool
+    /// The quiet stretch after the follow-up window: navigation commands the fast path understands
+    /// (scroll, tabs, apps) still work without the name; nothing reaches the model.
+    public var inSoftWindow: Bool
 
     public init(state: ListeningState, isDictating: Bool = false, hasPendingConfirmation: Bool = false,
                 inFollowUpWindow: Bool = false, numbersVisible: Bool = false, pushToTalk: PushToTalkKey? = nil, isReading: Bool = false,
-                screenAgentBusy: Bool = false) {
+                screenAgentBusy: Bool = false, inSoftWindow: Bool = false) {
         self.state = state; self.isDictating = isDictating; self.hasPendingConfirmation = hasPendingConfirmation
         self.inFollowUpWindow = inFollowUpWindow; self.numbersVisible = numbersVisible; self.pushToTalk = pushToTalk
         self.isReading = isReading
         self.screenAgentBusy = screenAgentBusy
+        self.inSoftWindow = inSoftWindow
     }
 }
 
@@ -34,6 +38,8 @@ public enum Route: Equatable {
     case wakeWithCommand(String)
     /// Command text with the name removed. Empty string = the user just said "Sirena" (attention).
     case command(String)
+    /// Said without the name after the follow-up window: run it only through the fast path, never the model.
+    case fastPathOnly(String)
     case confirm(Bool)
     case dictation(String)
     /// Dictated text that ends with "…, Sirena, stop": type the text, then run the command.
@@ -46,10 +52,13 @@ public enum Route: Equatable {
 public enum UtteranceRouter {
     static let yesWords: Set<String> = ["yes", "yeah", "yep", "yup", "yes please", "confirm", "confirmed", "do it", "go ahead",
                                         "send it", "send", "ok", "okay", "sure", "correct", "affirmative", "proceed", "yes send it",
-                                        "yes do it", "go", "yes go ahead", "please do", "okay send it", "ok send it", "ya", "yes yes"]
+                                        "yes do it", "go", "yes go ahead", "please do", "okay send it", "ok send it", "ya", "yes yes",
+                                        "sim", "sim sim", "pode", "pode ser", "claro", "envia", "manda", "confirma", "confirmo", "sim envia",
+                                        "sim pode", "isso", "força", "forca", "vai"]
     static let noWords: Set<String> = ["no", "nope", "cancel", "stop", "don't", "do not", "never mind", "nevermind", "abort",
                                        "negative", "no cancel", "cancel it", "no stop", "no don't", "don't send", "don't send it",
-                                       "no thanks", "forget it", "cancel that", "no no"]
+                                       "no thanks", "forget it", "cancel that", "no no",
+                                       "não", "nao", "não não", "cancela", "cancelar", "para", "esquece", "não envies", "não mandes", "deixa"]
 
     public static func route(_ raw: String, context: RouterContext) -> Route {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -61,7 +70,13 @@ public enum UtteranceRouter {
             return .ignore("off")
         case .waiting:
             if WakeWord.isWakePhrase(text) { return .wake }
-            if let rest = WakeWord.stripLeadingWakePhrase(text), !WakeWord.normalize(rest).isEmpty { return .wakeWithCommand(rest) }
+            if let rest = WakeWord.stripLeadingWakePhrase(text), !WakeWord.normalize(rest).isEmpty {
+                // "Hey Sirena, to my party in the club I'm so and everybody knows…" (a song heard as the wake phrase):
+                // a long rest that is neither a command nor a question only wakes her.
+                let shape = CommandShape.classify(rest, isKnownPhrase: isKnownPhrase)
+                if shape != .command, shape != .question, rest.split(separator: " ").count > 8 { return .wake }
+                return .wakeWithCommand(rest)
+            }
             return .ignore("waiting")
         case .awake:
             break
@@ -94,15 +109,19 @@ public enum UtteranceRouter {
         let afterNameNorm = afterName.map(WakeWord.normalize)
 
         if context.hasPendingConfirmation {
-            let candidate = afterNameNorm ?? norm
-            if yesWords.contains(candidate) { return .confirm(true) }
-            if noWords.contains(candidate) { return .confirm(false) }
+            let around = afterName == nil ? commandAroundName(text, controlsOnly: true) : nil
+            let candidate = around.map(WakeWord.normalize) ?? afterNameNorm ?? norm
+            if yesWords.contains(candidate) || yesWords.contains(FastPathParser.normalize(candidate)) { return .confirm(true) }
+            if noWords.contains(candidate) || noWords.contains(FastPathParser.normalize(candidate)) { return .confirm(false) }
             if let rest = afterName, !rest.isEmpty { return .command(rest) }
+            if let around { return .command(around) }
             return .ignore("awaiting confirmation")
         }
 
         if let rest = afterName {
             if WakeWord.isWakePhrase(text) { return .wake }
+            // "Sirena, uh…": only the name was meant.
+            if FastPathParser.normalize(rest).isEmpty { return .command("") }
             return .command(rest)
         }
 
@@ -110,14 +129,35 @@ public enum UtteranceRouter {
             if let (before, command) = splitTrailingCommand(text) {
                 return WakeWord.normalize(before).isEmpty ? .command(command) : .dictationThenCommand(before, command)
             }
+            // "Stop Sirena", "para Sirena": a control with the name after it.
+            if let command = commandAroundName(text, controlsOnly: true) { return .command(command) }
             return .dictation(text)
         }
         // "… something else. Sirena, wait." — the recognizer merged two utterances; the name starts the second one.
         if let command = commandAfterSentenceBreak(text) { return .command(command) }
-        if context.inFollowUpWindow { return .command(text) }
+        // "wait Sirena", "focus Sirena stop", "Para, para Sirena, para."
+        if let command = commandAroundName(text, controlsOnly: false) { return .command(command) }
         if context.numbersVisible, let n = Numbers.parse(norm) { return .command("click \(n)") }
+        let shape = CommandShape.classify(text, numbersVisible: context.numbersVisible, isKnownPhrase: isKnownPhrase)
+        if context.inFollowUpWindow {
+            switch shape {
+            case .command: return .command(text)
+            case .filler: return .ignore("filler")
+            case .incomplete: return .ignore("incomplete")
+            case .question: return .ignore("question")
+            case .chatter: return .ignore("chatter")
+            }
+        }
+        if context.inSoftWindow, shape == .command,
+           let parsed = FastPathParser.parse(text, context: .init(isDictating: false, numbersVisible: context.numbersVisible)),
+           FastPathParser.isSafeWithoutName(parsed) {
+            return .fastPathOnly(text)
+        }
         return .ignore("no name")
     }
+
+    /// The user's own phrases (saved shortcuts), so they work in the follow-up window like built-in commands.
+    public static var isKnownPhrase: (String) -> Bool = { _ in false }
 }
 
 extension UtteranceRouter {
@@ -135,6 +175,32 @@ extension UtteranceRouter {
         return (before, command)
     }
 
+    static let namesPattern = "(?:" + WakeWord.nameVariants.filter { !$0.contains(" ") && $0 != "siren" }.joined(separator: "|") + ")"
+
+    /// A command next to the name that is not at the start: "wait Sirena", "Stop, Sirena." (name at the end) or
+    /// "focus Sirena stop", "Para, para Sirena, para." (a short command right after the name). Only text that is
+    /// itself a command counts (a control, or with `controlsOnly == false` anything the fast path understands),
+    /// so "we talked about Sirena yesterday" stays chatter.
+    static func commandAroundName(_ text: String, controlsOnly: Bool) -> String? {
+        func accepted(_ s: String) -> String? {
+            let c = s.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ",.;:!?")))
+            let t = FastPathParser.normalize(c)
+            guard !t.isEmpty else { return nil }
+            if FastPathParser.controlCommand(c) != nil || readingControl(t) != nil || yesWords.contains(t) || noWords.contains(t) { return c }
+            guard !controlsOnly, t.split(separator: " ").count <= 6, let parsed = FastPathParser.parse(c) else { return nil }
+            if case .webSearch = parsed.actions.first { return nil }
+            return c
+        }
+        // Name at the end.
+        if let m = text.firstMatch("^(.+?)[,\\s]+(?:hey\\s+)?" + namesPattern + "[\\s.!?,]*$"), let c = accepted(m[1]) { return c }
+        // Name in the middle, the command after it.
+        let ns = text as NSString
+        if let m = nameSplitRegex.matches(in: text, range: NSRange(location: 0, length: ns.length)).last, m.range(at: 1).location > 0 {
+            if let c = accepted(ns.substring(with: m.range(at: 2))) { return c }
+        }
+        return nil
+    }
+
     /// "Não pode ajudar com isso. Sirena, wait." → "wait" (the name right after a sentence break).
     static func commandAfterSentenceBreak(_ text: String) -> String? {
         guard let r = text.range(of: "[.!?]\\s+(?:hey\\s+)?(?:" + WakeWord.nameVariants.filter { !$0.contains(" ") && $0 != "siren" }.joined(separator: "|") + ")[,.!]?\\s+", options: [.regularExpression, .caseInsensitive, .backwards]) else { return nil }
@@ -148,6 +214,8 @@ extension UtteranceRouter {
         "resume": .resume, "resume reading": .resume, "continue": .resume, "continue reading": .resume, "go on": .resume, "keep reading": .resume, "keep going": .resume, "play": .resume, "go ahead": .resume,
         "faster": .faster, "read faster": .faster, "speed up": .faster, "go faster": .faster, "a bit faster": .faster, "quicker": .faster, "faster please": .faster,
         "slower": .slower, "read slower": .slower, "slow down": .slower, "go slower": .slower, "a bit slower": .slower, "slower please": .slower,
+        "para": .stop, "parar": .stop, "chega": .stop, "pausa": .pause, "espera": .pause, "continua": .resume, "continua a ler": .resume,
+        "mais rápido": .faster, "mais rapido": .faster, "mais devagar": .slower, "mais lento": .slower,
     ]
 
     public static func readingControl(_ normalized: String) -> ReadingControl? { readingWords[normalized] }

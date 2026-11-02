@@ -18,6 +18,37 @@ emits 80 ms chunks (3840 bytes). `RealtimeTranscriber` keeps one WebSocket sessi
 The `asr` latency shown in the overlay is the time between the audio frame where speech ended (as reported
 by `speechEnd.audioProcessedMs`) was sent and the `speechComplete` event.
 
+### The Mac's own sound (`EchoCanceller`, `EchoGate`, `SystemAudioTap`)
+
+Voice processing cancels only Sirena's own playback and only on the default input, so other apps' sound reached
+the recognizer (a song's "Hey, welcome…" was heard as "Hey Sirena", lyrics ran as commands). While Sirena is not
+off and Core Audio reports another process with output running, `SystemAudioTap` captures the system mix with
+ScreenCaptureKit (24 kHz mono, own process excluded, 2×2-pixel video ignored) as a reference stamped with host
+time; `AudioCapture` stamps every microphone chunk the same way. The reference is kept as a continuous stream by
+absolute sample index (jitter under 4 ms ignored). A microphone chunk waits until its stretch of reference has
+arrived (it lags the microphone by up to ~100 ms), then `EchoCanceller` subtracts the predicted echo: a
+partitioned-block frequency-domain NLMS filter (10 ms blocks, 480-point transforms, 24 partitions = 240 ms path),
+normalized by the reference power over the filter span (peak-held on every block, so a loud passage after a pause
+cannot overshoot), gradient-constrained on every partition, frozen while a voice is heard, slowed once converged
+when the residual is not echo-like, reset if the residual stays louder than the microphone. About 19 dB of
+cancellation on simulated music through a distorting laptop speaker; ~1.3% of one core in release.
+
+`EchoGate` then judges the canceller's output, per 10 ms frame in five bands (150 Hz–6 kHz): the delay and the
+speaker-to-microphone coupling are learned on the raw microphone (median of microphone-minus-reference on loud,
+voice-free frames; stable per device pair and what is stored); the canceller's current reduction per band is
+measured on the same frames; the leftover echo is predicted as reference + coupling − reduction, with a
+reverberation tail and a few frames of slack, power-summed with the room-noise floor (learned only while nothing
+plays). A frame is a voice when the speech bands (400–3200 Hz) exceed it by 10 dB (the leftover is spikier than raw
+echo); a chunk opens with 50 ms of voice, keeps 400 ms of hangover and releases the chunk before it (one chunk of
+lookahead). The recognizer gets the cleaned audio when open, silence otherwise. Excess that rises and falls with the reference (r > 0.8
+over 200 ms, no voice just before) is louder echo, not a voice: the coupling is raised at once (at most 12 dB) and
+fades back by 2 dB/s. A hiss rise
+above 3.2 kHz keeps the gate open within a phrase. Learned coupling is stored per microphone/speaker pair;
+built-in speakers into the built-in microphone start from values measured on a MacBook Air. Tuned on real
+recordings (`--selftest echo` records to /tmp/sirena-echo and transcribes with and without the gate) and on
+`EchoSimulation` (a ringtone with sung lyrics through a laptop speaker and room, the user's command at chosen levels;
+`--selftest echo-sim`, `sirena-cli echo-bench`).
+
 ### On-device wake word
 
 In the waiting state `LocalWakeWordDetector` runs `SFSpeechRecognizer` with `requiresOnDeviceRecognition`
@@ -57,7 +88,15 @@ footer, share bar or recommendation), or all visible text.
 * `UtteranceRouter` classifies each final transcript using the state, dictation mode, pending confirmation,
   follow-up window, numbers mode and push-to-talk key. The name is only recognized at the start of an
   utterance, with a list of misrecognitions ("Serena", "siren a", …).
-* The follow-up window (6 s, 15 s while numbers are visible) is restarted by every command.
+* The follow-up window (8 s, 12 s after a wake, 15 s while numbers are visible) is restarted by every command and
+  stays open while one runs. It is checked against the recognizer's speech start of the utterance, not the
+  arrival of its transcript. Until 20 s after the last command a quiet stretch lets safe fast-path commands
+  (`FastPathParser.isSafeWithoutName`) run without the name, through the fast path only.
+* `CommandShape` classifies name-less speech as command, filler, incomplete, question or chatter; only commands
+  reach the pipeline. A control next to the name anywhere in the utterance ("wait Sirena") counts as named.
+* When the recognizer reports the end of speech, `ListeningController.prepareEarly` takes the element snapshot and,
+  for words only the model can handle, sends the first model call (or the dictation cleanup) with the last partial
+  transcript; the result is used only if the final transcript matches. Nothing acts before the final transcript.
 
 ## Command pipeline
 

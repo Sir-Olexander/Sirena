@@ -1,10 +1,11 @@
 import Foundation
 import AppKit
+import CoreAudio
 
 /// The listening brain: off / waiting / awake, the "Sirena" rule, the follow-up window, dictation mode,
 /// confirmations and the idle timeout. Everything here runs on the main thread.
 public final class ListeningController {
-    public private(set) var state: ListeningState = .off { didSet { overlay.setState(state) } }
+    public private(set) var state: ListeningState = .off { didSet { overlay.setState(state); updateOtherAudioWatch() } }
     public private(set) var isDictating = false { didSet { overlay.setDictating(isDictating) } }
     public var pushToTalkKey: PushToTalkKey?
     public var onStateChange: ((ListeningState) -> Void)?
@@ -33,8 +34,30 @@ public final class ListeningController {
     /// Reads text aloud; its voice is filtered out of what Sirena hears.
     public let reader = ReadAloud()
 
+    /// End of the follow-up window (commands without the name). Kept after it expires, so an utterance that
+    /// started inside the window still counts when its transcript arrives later.
     private var followUpUntil: Date?
+    /// End of the quiet stretch in which navigation commands the fast path understands work without the name.
+    private var softUntil: Date?
     private var followUpTimer: Timer?
+    /// When each utterance being transcribed began (the recognizer's speech start, by turn).
+    private var speechStarts: [Int: Date] = [:]
+    /// When the recognizer said each utterance ended, by turn (to measure the wait for the final text).
+    private var speechEnds: [Int: Date] = [:]
+    /// Latest partial transcript of the utterance in progress.
+    private var lastPartial = ""
+    /// Dictation inserts and edits still queued or running.
+    private var pendingDictationWork = 0
+
+    // MARK: The Mac's own sound
+    /// Silences what only comes from the speakers (music, videos) before it reaches the recognizer.
+    private let echoGate = EchoGate()
+    private let systemAudio = SystemAudioTap()
+    private var otherAudioTimer: Timer?
+    private var otherAudioQuietSince: Date?
+    private var echoDevicesKey = ""
+    private var echoNoticeShown = false
+    private var echoPermissionHintShown = false
     private var idleTimer: Timer?
     private var keywordTimer: Timer?
     private var usingFallback = false
@@ -48,9 +71,11 @@ public final class ListeningController {
 
     private func enqueueDictation(_ work: @escaping () async -> Void) {
         let previous = dictationChain
+        pendingDictationWork += 1
         dictationChain = Task {
             await previous?.value
             await work()
+            await MainActor.run { [weak self] in self?.pendingDictationWork -= 1 }
         }
     }
 
@@ -66,12 +91,18 @@ public final class ListeningController {
         transcriber.onEvent = { [weak self] e in self?.handle(e) }
         fallback?.keywordsProvider = { [weak self] in self?.context.keywords() ?? ["Sirena"] }
         fallback?.onEvent = { [weak self] e in self?.handle(e) }
-        audio.onChunk = { [weak self] pcm in
+        audio.onTimedChunk = { [weak self] pcm, time in
             guard let self else { return }
-            for chunk in self.gate.process(pcm) {
-                if self.usingFallback { self.fallback?.send(chunk, level: self.gate.privateMode ? 0 : self.lastLevel) } else { self.transcriber.send(chunk) }
+            // Music or a video playing on the Mac: what the microphone hears of it alone becomes silence.
+            for piece in self.echoGate.filter(pcm, time: time) {
+                let silent = !piece.contains { $0 != 0 }
+                for chunk in self.gate.process(piece) {
+                    if self.usingFallback { self.fallback?.send(chunk, level: self.gate.privateMode || silent ? 0 : self.lastLevel) } else { self.transcriber.send(chunk) }
+                }
             }
         }
+        systemAudio.onSamples = { [weak self] samples, time in self?.echoGate.addReference(samples, time: time) }
+        systemAudio.onStopped = { [weak self] _ in DispatchQueue.main.async { self?.otherAudioQuietSince = nil } }
         audio.onLevel = { [weak self] level, seconds in
             guard let self else { return }
             self.lastLevel = level
@@ -123,6 +154,7 @@ public final class ListeningController {
             // Each command restarts the follow-up window (unless a confirmation is showing).
             if !self.pipeline.hasPendingConfirmation { self.openFollowUpWindow() }
         }
+        UtteranceRouter.isKnownPhrase = { [weak pipeline] t in pipeline?.isShortcutPhrase(t) ?? false }
         numbers.onHidden = { [weak self] in self?.overlay.setNumbersVisible(false) }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
             guard let self, let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
@@ -143,6 +175,80 @@ public final class ListeningController {
         case .waiting: wake(method: method)
         case .awake: turnOff()
         }
+    }
+
+    // MARK: - The Mac's own sound
+
+    /// While Sirena listens (awake, or waiting for "Hey Sirena": a song once woke her), check twice a second whether
+    /// other apps play sound; capture it as the echo reference only then (the capture shows the screen-recording
+    /// indicator, so it does not run otherwise).
+    private func updateOtherAudioWatch() {
+        if state != .off, settings.ignoreOwnAudio, !simulateInput {
+            guard otherAudioTimer == nil else { return }
+            otherAudioTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.checkOtherAudio() }
+            checkOtherAudio()
+        } else {
+            otherAudioTimer?.invalidate(); otherAudioTimer = nil
+            otherAudioQuietSince = nil
+            if systemAudio.isRunning, !echoDevicesKey.isEmpty, let l = echoGate.learned { settings.setEchoLearned(l, for: echoDevicesKey) }
+            systemAudio.stop()
+        }
+    }
+
+    private func checkOtherAudio() {
+        guard state != .off, settings.ignoreOwnAudio else { updateOtherAudioWatch(); return }
+        // Another microphone or output device: the coupling learned so far no longer applies.
+        let output = OtherAudio.defaultOutput
+        let key = "\(audio.currentDeviceUID)|\(AudioDevices.string(output.id, kAudioDevicePropertyDeviceUID))"
+        if key != echoDevicesKey {
+            if !echoDevicesKey.isEmpty, let l = echoGate.learned { settings.setEchoLearned(l, for: echoDevicesKey) }
+            echoDevicesKey = key
+            echoGate.reset()
+            let builtInPair = output.builtIn && (AudioDevices.inputs().first { $0.uid == audio.currentDeviceUID }?.isBuiltIn ?? false)
+            if let l = settings.echoLearned(for: key) ?? (builtInPair ? .builtInSpeakersAndMic : nil) { echoGate.seed(l) }
+        }
+        let players = OtherAudio.players()
+        if !players.isEmpty {
+            otherAudioQuietSince = nil
+            guard !systemAudio.isRunning, !systemAudio.isStarting else {
+                if !echoNoticeShown, echoGate.status == .gating {
+                    echoNoticeShown = true
+                    overlay.showHint("Ignoring the sound \(players.first?.name ?? "the Mac") is playing", autoClear: 3)
+                }
+                return
+            }
+            guard SystemAudioTap.isPermitted else {
+                if !echoPermissionHintShown, !output.name.isEmpty {
+                    echoPermissionHintShown = true
+                    overlay.showMessage("Music is playing: allow Screen Recording for Sirena so she does not transcribe it", autoClear: 6)
+                }
+                return
+            }
+            Log.speech.notice("other audio playing (\(players.map(\.name).joined(separator: ", "), privacy: .public)) on \(output.name, privacy: .public): starting the echo reference")
+            Task { [systemAudio] in
+                do { try await systemAudio.start() } catch { Log.speech.error("echo reference: \(error.localizedDescription, privacy: .public)") }
+            }
+        } else if systemAudio.isRunning {
+            // Stop a few seconds after the sound stops (pauses between songs keep it running).
+            if let since = otherAudioQuietSince {
+                if Date().timeIntervalSince(since) > 5 {
+                    systemAudio.stop(); otherAudioQuietSince = nil
+                    if let l = echoGate.learned { settings.setEchoLearned(l, for: echoDevicesKey) }
+                }
+            } else {
+                otherAudioQuietSince = Date()
+            }
+        }
+    }
+
+    /// The "Ignore music and videos" setting changed.
+    public func applyOwnAudioSetting() { updateOtherAudioWatch() }
+
+    /// Diagnostics: what the echo gate is doing.
+    public var echoStatus: String {
+        guard settings.ignoreOwnAudio else { return "off" }
+        if !SystemAudioTap.isPermitted { return "needs Screen Recording" }
+        return systemAudio.isRunning ? "\(echoGate.status.rawValue), delay \(echoGate.delayFrames * 10) ms, \(echoGate.gatedChunks) chunks silenced" : "idle"
     }
 
     // MARK: - Microphone choice and silent microphones
@@ -367,7 +473,7 @@ public final class ListeningController {
         onStateChange?(.awake)
         overlay.showWorking("I'm here", autoClear: 1.5)
         resetIdleTimer()
-        openFollowUpWindow()
+        openFollowUpWindow(duration: settings.followUpAfterWake)
         Log.listening.info("awake")
     }
 
@@ -391,23 +497,43 @@ public final class ListeningController {
 
     private var followUpDuration: TimeInterval { numbers.isVisible ? settings.followUpWindowWithNumbers : settings.followUpWindow }
 
-    private func openFollowUpWindow() {
-        let until = Date().addingTimeInterval(followUpDuration)
-        followUpUntil = until
-        overlay.setFollowUp(until: until)
+    /// Opens (or extends) the follow-up window and the quiet stretch after it.
+    private func openFollowUpWindow(duration: TimeInterval? = nil) {
+        let d = max(duration ?? followUpDuration, followUpDuration)
+        let until = Date().addingTimeInterval(d)
+        followUpUntil = max(until, followUpUntil ?? .distantPast)
+        softUntil = max(Date().addingTimeInterval(settings.softFollowUpWindow), softUntil ?? .distantPast)
+        overlay.setFollowUp(until: followUpUntil)
         followUpTimer?.invalidate()
-        followUpTimer = Timer.scheduledTimer(withTimeInterval: followUpDuration, repeats: false) { [weak self] _ in
-            self?.closeFollowUpWindow()
+        followUpTimer = Timer.scheduledTimer(withTimeInterval: d, repeats: false) { [weak self] _ in
+            // Expired: only the overlay changes; `followUpUntil` stays so speech that began in time still counts.
+            self?.overlay.setFollowUp(until: nil)
         }
     }
 
+    /// Ends the window on purpose (wait, dictation, reading, off): nothing said afterwards counts as a follow-up.
     private func closeFollowUpWindow() {
         followUpTimer?.invalidate(); followUpTimer = nil
         followUpUntil = nil
+        softUntil = nil
         overlay.setFollowUp(until: nil)
     }
 
-    private var inFollowUpWindow: Bool { followUpUntil.map { $0 > Date() } ?? false }
+    /// Whether speech that began at `start` falls in the follow-up window (or a command was still running).
+    private func inFollowUpWindow(spokeAt start: Date) -> Bool {
+        if pipeline.isBusy { return true }
+        return followUpUntil.map { start < $0 } ?? false
+    }
+
+    private func inSoftWindow(spokeAt start: Date) -> Bool { softUntil.map { start < $0 } ?? false }
+
+    /// When the utterance whose transcript just arrived began. Without a recognizer speech start (or a stale one),
+    /// an estimate from the transcript length.
+    private func utteranceStart(text: String, asrMs: Int?, recorded: Date?) -> Date {
+        if let s = recorded, Date().timeIntervalSince(s) < 30 { return s }
+        let words = Double(text.split(separator: " ").count)
+        return Date().addingTimeInterval(-(Double(asrMs ?? 750) / 1000 + min(8, words * 0.35)))
+    }
 
     private func resetIdleTimer() {
         idleTimer?.invalidate()
@@ -425,17 +551,30 @@ public final class ListeningController {
         case .connected:
             overlay.setConnection(nil)
             reconnectNoteShown = false
-        case .speechStart:
+        case .speechStart(let turn):
             if state == .awake { overlay.setSpeaking(true) }
+            speechStarts = speechStarts.filter { Date().timeIntervalSince($0.value) < 60 }
+            speechStarts[turn] = Date()
             resetIdleTimer()
         case .partial(let text):
             if state == .awake { overlay.setPartial(text) }
-        case .speechEnd:
+            lastPartial = text
+        case .speechEnd(let turn):
             overlay.setSpeaking(false)
-        case .final(let text, _, let asr):
+            speechEnds = speechEnds.filter { Date().timeIntervalSince($0.value) < 60 }
+            speechEnds[turn] = Date()
+            prepareEarly(turn: turn)
+        case .final(let text, let turn, let asr):
             overlay.setSpeaking(false)
             overlay.setPartial("")
-            route(text, asrMs: asr)
+            lastPartial = ""
+            if let end = speechEnds.removeValue(forKey: turn) {
+                let tail = Int(Date().timeIntervalSince(end) * 1000)
+                SessionStats.shared.noteSpeechTail(endToTextMs: tail, recognizerMs: asr)
+                Log.speech.notice("final text \(tail) ms after the end of speech was detected (recognizer total \(asr ?? -1) ms)")
+            }
+            let start = utteranceStart(text: text, asrMs: asr, recorded: speechStarts.removeValue(forKey: turn))
+            route(text, asrMs: asr, spokeAt: start)
         case .error(let msg):
             overlay.showError(msg)
         case .disconnected(let code, let reason):
@@ -454,17 +593,42 @@ public final class ListeningController {
         }
     }
 
-    private func route(_ text: String, asrMs: Int?, forceDictation: Bool = false) {
+    /// The recognizer detected the end of speech; the final text follows ~0.5–1 s later. Use that time: take the
+    /// screen snapshot and send the first model call (or the dictation cleanup) for the words heard so far.
+    /// Nothing acts on the Mac before the final transcript.
+    private func prepareEarly(turn: Int) {
+        let text = lastPartial.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard state == .awake, !text.isEmpty, pushToTalkKey == nil, !reader.isActive, !pipeline.isScreenAgentRunning,
+              !pipeline.hasPendingConfirmation else { return }
+        let start = speechStarts[turn] ?? Date()
+        let ctx = RouterContext(state: state, isDictating: isDictating, hasPendingConfirmation: false,
+                                inFollowUpWindow: inFollowUpWindow(spokeAt: start), numbersVisible: numbers.isVisible,
+                                inSoftWindow: inSoftWindow(spokeAt: start))
+        switch UtteranceRouter.route(text, context: ctx) {
+        case .command(let cmd) where pipeline.needsModel(cmd):
+            pipeline.prepare(command: cmd)
+        case .dictation(let raw) where pendingDictationWork == 0:
+            dictation.speculate(raw: raw, frontApp: RunningApps.frontmost())
+        default:
+            break
+        }
+    }
+
+    private func route(_ text: String, asrMs: Int?, spokeAt: Date = Date(), forceDictation: Bool = false) {
         // Sirena hearing herself read: never act on it.
         if reader.recentlyActive, reader.isLikelyEcho(text) {
             history.append(HistoryEntry(utterance: text, route: "ignored (own voice)", latency: LatencyReport(asrMs: asrMs)))
             return
         }
         let ctx = RouterContext(state: state, isDictating: isDictating, hasPendingConfirmation: pipeline.hasPendingConfirmation,
-                                inFollowUpWindow: inFollowUpWindow, numbersVisible: numbers.isVisible, pushToTalk: pushToTalkKey,
-                                isReading: reader.isActive, screenAgentBusy: pipeline.isScreenAgentRunning)
+                                inFollowUpWindow: inFollowUpWindow(spokeAt: spokeAt), numbersVisible: numbers.isVisible, pushToTalk: pushToTalkKey,
+                                isReading: reader.isActive, screenAgentBusy: pipeline.isScreenAgentRunning, inSoftWindow: inSoftWindow(spokeAt: spokeAt))
         let decision = forceDictation ? .dictation(text) : UtteranceRouter.route(text, context: ctx)
         Log.listening.info("utterance \"\(text, privacy: .public)\" → \(String(describing: decision), privacy: .public)")
+        switch decision {
+        case .command, .wakeWithCommand: break
+        default: pipeline.discardPrepared()   // a model call started at the end of speech is not needed
+        }
         if state == .awake { resetIdleTimer() }
         switch decision {
         case .wake:
@@ -474,7 +638,7 @@ public final class ListeningController {
             } else {
                 // The stream's transcript of a phrase the on-device detector already acted on: no second greeting.
                 if Date().timeIntervalSince(wokeAt) > 5 { overlay.showWorking("Yes?", autoClear: 1.5) }
-                openFollowUpWindow()
+                openFollowUpWindow(duration: settings.followUpAfterWake)
             }
         case .wakeWithCommand(let cmd):
             wake(method: "stream")
@@ -483,18 +647,20 @@ public final class ListeningController {
         case .command(let cmd):
             if cmd.isEmpty {
                 overlay.showWorking("Yes?", autoClear: 1.5)
-                openFollowUpWindow()
+                openFollowUpWindow(duration: settings.followUpAfterWake)
                 history.append(HistoryEntry(utterance: text, route: "attention", latency: LatencyReport(asrMs: asrMs)))
                 return
             }
-            closeFollowUpWindow()
+            // The window stays open while the command runs; it restarts when the command finishes.
             pipeline.handle(command: cmd, asrMs: asrMs)
+        case .fastPathOnly(let cmd):
+            pipeline.handle(command: cmd, asrMs: asrMs, fastPathOnly: true)
         case .confirm(let yes):
             history.append(HistoryEntry(utterance: text, route: "confirmation", result: yes ? "yes" : "no", latency: LatencyReport(asrMs: asrMs)))
             pipeline.resolveConfirmation(yes)
             if yes { openFollowUpWindow() }
         case .dictationThenCommand(let dictated, let command):
-            route(dictated, asrMs: asrMs, forceDictation: true)
+            route(dictated, asrMs: asrMs, spokeAt: spokeAt, forceDictation: true)
             enqueueDictation { [weak self] in
                 await MainActor.run { self?.pipeline.handle(command: command, asrMs: asrMs) }
             }
@@ -522,6 +688,8 @@ public final class ListeningController {
             history.append(HistoryEntry(utterance: text, route: "ignored (\(why))", latency: LatencyReport(asrMs: asrMs)))
             if state == .awake, !isDictating, why == "no name" {
                 overlay.showHint("Start with “Sirena” to give a command")
+            } else if why == "incomplete" {
+                overlay.showHint("I only heard “\(text.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters)))” — say the whole command", autoClear: 3)
             } else if why == "screen agent busy" {
                 overlay.showHint("Still looking at the screen — say “cancel” to stop it", autoClear: 3)
             }

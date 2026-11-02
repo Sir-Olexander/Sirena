@@ -24,7 +24,8 @@ public final class ModelCommandPlanner {
     Respond with tool calls that carry out the command directly; several tool calls in order are fine. Act, do not ask questions.
 
     Guidelines:
-    - Prefer the cheapest direct action: activate_app for app switching, switch_tab for browser tabs, press_keys for shortcuts, click_element / focus_element with the exact label from the element list.
+    - Prefer the cheapest direct action: activate_app for app switching, switch_tab for browser tabs, press_keys for shortcuts, click_element / focus_element with the element's id and exact label from the element list.
+    - Element ids are only valid for the snapshot they came from. Always pass the id when several elements share a label or the label is empty. Switches and checkboxes show [on] or [off]: to turn one on, click it only when it is [off] (and the reverse).
     - "open X": use open (an exact app name opens the app; a website name such as Google, YouTube or Gmail opens the site in the browser in front).
     - Requests to change the wording or formatting of text the user dictated, selected, or that is in the focused editable field ("make that a list", "separate the points with two line breaks", "fix the grammar") → edit_text with the instruction. Never use need_screen for text edits.
     - To copy, select or read a piece of the text on screen (a paragraph, a sentence, the title, the last message) use copy_text. Never use edit_text to copy, select or read.
@@ -32,9 +33,10 @@ public final class ModelCommandPlanner {
     - Several screens: move_window_to_screen and focus_screen (targets: next, previous, other, left, right, main, built-in, external, or a number from the Screens line).
     - read_aloud reads the selection, the article or the page. save_note saves a note without leaving the app. choose_menu_item picks a menu bar item by path.
     - "Windows" phrasing maps to the Mac equivalent (Alt+Tab → cmd+tab, Ctrl+C → cmd+c, Alt+F4 → cmd+q, F5 → cmd+r).
-    - To send a message or chat prompt: activate_app if needed, focus_element on the composer (or focus_composer), type_text with the message, then confirm("Send this message?") and finally press_keys("return"). Never press Enter to send, delete, submit a purchase or close unsaved work without a confirm step right before it.
-    - Use scroll for scrolling, open_url for websites, web_search for searches, close_tabs to close several tabs at once.
-    - If the request needs visual understanding that the element list cannot give (the element is not listed, positions matter, images, canvas apps), call need_screen with a concise goal so the screenshot fallback can take over. Only do this when direct tools cannot work.
+    - To send a message or chat prompt: activate_app if needed, focus_element on the composer (or focus_composer), type_text with the message, then confirm("Send this message?") and finally press_keys("return"). Never press Enter to send, delete, submit a purchase or close unsaved work without a confirm step right before it. Never call confirm on its own: the tool calls it guards must follow it in the same turn (a "yes" runs exactly those).
+    - "the first link", "the second result", "the third video" on a web page → open_result (never a "skip to content" link).
+    - Use scroll for scrolling, open_url for websites, web_search for searches. Closing more than one tab is always one close_tabs call ("close all tabs" → which=all); never a series of cmd+w and never cmd+shift+w.
+    - Call need_screen (a slow screenshot fallback) only when the command names something that is not in the element list, or needs images, positions or a canvas app; give a concise goal. Never for vague follow-ups ("this one", "more", "resume"): answer in a few words instead.
     - If the user is not asking for an action (a question, a comment), reply in one short sentence instead of calling tools.
     - Keep tool arguments minimal and exact. Labels must be copied from the element list when they exist.
     - When several steps are needed and the later steps do not depend on seeing the new screen (activate_app then press_keys, focus then type_text), emit all of them in one turn, in order. After your tool calls run you receive their results and a fresh snapshot; continue only if the command is not finished, otherwise answer with a few words and no tool calls.
@@ -53,12 +55,12 @@ public final class ModelCommandPlanner {
                     "what": ["type": "string", "enum": ["paragraph", "sentence", "title", "last_message", "this_paragraph"]],
                     "index": ["type": "integer", "description": "1-based; -1 for the last"],
                     "about": ["type": "string"], "starts_with": ["type": "string"]], "required": ["action", "what"]]),
-        ChatTool(name: "focus_element", description: "Put the keyboard focus into a text field or element with this label.",
-                 parameters: ["type": "object", "properties": ["label": ["type": "string"]], "required": ["label"]]),
+        ChatTool(name: "focus_element", description: "Put the keyboard focus into a text field or element: its id from the element list and its label.",
+                 parameters: ["type": "object", "properties": ["id": ["type": "integer", "description": "id from the element list"], "label": ["type": "string"]], "required": []]),
         ChatTool(name: "focus_composer", description: "Focus the main message box / chat input of the front window.",
                  parameters: ["type": "object", "properties": [:], "required": []]),
-        ChatTool(name: "click_element", description: "Click a button, link, menu item or control by its label.",
-                 parameters: ["type": "object", "properties": ["label": ["type": "string"]], "required": ["label"]]),
+        ChatTool(name: "click_element", description: "Click a button, link, switch, menu item or control: its id from the element list and its label.",
+                 parameters: ["type": "object", "properties": ["id": ["type": "integer", "description": "id from the element list"], "label": ["type": "string"]], "required": []]),
         ChatTool(name: "type_text", description: "Type text at the current cursor position.",
                  parameters: ["type": "object", "properties": ["text": ["type": "string"]], "required": ["text"]]),
         ChatTool(name: "scroll", description: "Scroll the front window.",
@@ -83,8 +85,10 @@ public final class ModelCommandPlanner {
                  parameters: ["type": "object", "properties": ["text": ["type": "string"]], "required": ["text"]]),
         ChatTool(name: "choose_menu_item", description: "Choose a menu bar item of the front app by path, e.g. 'File > New Note'.",
                  parameters: ["type": "object", "properties": ["path": ["type": "string"]], "required": ["path"]]),
-        ChatTool(name: "close_tabs", description: "Close several browser tabs of the front window at once: the tabs to the right or left of the active tab, all other tabs, or all tabs except one (keep = tab number).",
-                 parameters: ["type": "object", "properties": ["which": ["type": "string", "enum": ["right", "left", "others", "all_except"]], "keep": ["type": "integer"]], "required": ["which"]]),
+        ChatTool(name: "close_tabs", description: "Close several tabs of the front window at once: all of them (one empty tab stays), the tabs to the right or left of the active tab, all other tabs, or all tabs except one (keep = tab number).",
+                 parameters: ["type": "object", "properties": ["which": ["type": "string", "enum": ["all", "right", "left", "others", "all_except"]], "keep": ["type": "integer"]], "required": ["which"]]),
+        ChatTool(name: "open_result", description: "Open the Nth result or link of the main content of the web page in front (search results, video lists, article lists). 1-based; -1 for the last.",
+                 parameters: ["type": "object", "properties": ["index": ["type": "integer"]], "required": ["index"]]),
         ChatTool(name: "need_screen", description: "Hand over to the screenshot-based fallback with a concise goal, when the element list is not enough.",
                  parameters: ["type": "object", "properties": ["goal": ["type": "string"]], "required": ["goal"]]),
     ]
@@ -133,9 +137,18 @@ public final class ModelCommandPlanner {
         public init(summary: String, stop: Bool, newSnapshotText: String?) { self.summary = summary; self.stop = stop; self.newSnapshotText = newSnapshotText }
     }
 
+    /// The first request of the agent loop, so it can be sent before the final transcript arrives.
+    public func firstRequest(command: String, snapshotText: String, client: MetaAPIClient) -> ChatRequest {
+        ChatRequest(model: modelName(), messages: [.system(ModelCommandPlanner.systemPrompt),
+                                                   .user("Screen snapshot:\n\(snapshotText)\n\nSpoken command: \"\(command)\"")],
+                    tools: ModelCommandPlanner.tools, reasoning_effort: client.isLocal ? nil : "minimal", max_tokens: 1800,
+                    parallel_tool_calls: true, prompt_cache_key: "sirena-commands")
+    }
+
     /// Bounded agent loop: plan → execute → feed results and a fresh snapshot back → … (max `maxRounds`).
     /// `executeRound` runs one round's actions; returning `stop` ends the loop (confirmation pending, control action, handover).
-    public func run(command: String, snapshotText: String, maxRounds: Int = 3,
+    /// - Parameter firstResponse: the first round's reply already requested (speculatively, at the end of speech).
+    public func run(command: String, snapshotText: String, maxRounds: Int = 3, firstResponse: Task<ChatResponse, Error>? = nil,
                     executeRound: ([Action], Int) async throws -> RoundOutcome) async throws -> CommandPlan {
         guard let client = clientProvider() else { throw APIError.missingKey }
         var messages: [ChatMessage] = [.system(ModelCommandPlanner.systemPrompt),
@@ -145,7 +158,8 @@ public final class ModelCommandPlanner {
             let req = ChatRequest(model: modelName(), messages: messages, tools: ModelCommandPlanner.tools,
                                   reasoning_effort: client.isLocal ? nil : "minimal", max_tokens: 1800,
                                   parallel_tool_calls: true, prompt_cache_key: "sirena-commands")
-            let resp = try await client.chat(req)
+            let resp: ChatResponse
+            if round == 1, let first = firstResponse { resp = try await first.value } else { resp = try await client.chat(req) }
             plan.promptTokens! += resp.usage?.prompt_tokens ?? 0
             plan.completionTokens! += resp.usage?.completion_tokens ?? 0
             plan.reasoningTokens! += resp.usage?.completion_tokens_details?.reasoning_tokens ?? 0
@@ -223,13 +237,18 @@ public final class ModelCommandPlanner {
             default: return [.copyText(q)]
             }
         case "focus_element":
-            guard let l = s("label"), !l.isEmpty else { return [.focusComposer] }
+            let label = s("label").flatMap { $0.isEmpty ? nil : $0 }
+            if let id = elementId(args) { return [.focusId(id, label: label.flatMap { Int($0) == nil ? $0 : nil })] }
+            guard let l = label else { return [.focusComposer] }
             return [.focusElement(l)]
         case "focus_composer":
             return [.focusComposer]
         case "click_element":
-            guard let l = s("label"), !l.isEmpty else { return [] }
-            if let n = Int(l) { return [.clickNumber(n)] }
+            let label = s("label").flatMap { $0.isEmpty ? nil : $0 }
+            // An id (or a label that is only a number: the model quoting the id) refers to the element list it saw,
+            // never to the "show numbers" badges.
+            if let id = elementId(args) { return [.clickId(id, label: label.flatMap { Int($0) == nil ? $0 : nil })] }
+            guard let l = label else { return [] }
             return [.clickElement(l)]
         case "type_text":
             guard let t = s("text"), !t.isEmpty else { return [] }
@@ -246,12 +265,16 @@ public final class ModelCommandPlanner {
             return [.webSearch(q)]
         case "confirm":
             return [.confirmThen(message: s("message") ?? "Do it?", actions: [])]
+        case "open_result":
+            guard let i = args["index"]?.intValue, i != 0 else { return [] }
+            return [.openResult(i)]
         case "need_screen":
             return [.computerUse(goal: s("goal") ?? "")]
         case "close_tabs":
             switch s("which") ?? "" {
             case "right": return [.closeTabs(.right)]
             case "left": return [.closeTabs(.left)]
+            case "all": return [.closeTabs(.all)]
             case "all_except":
                 if let k = args["keep"]?.intValue, k > 0 { return [.closeTabs(.allExcept(.index(k)))] }
                 return [.closeTabs(.others)]
@@ -280,6 +303,14 @@ public final class ModelCommandPlanner {
         default:
             return []
         }
+    }
+
+    /// The element id of a click / focus call: `id`, or a `label` that is only a number.
+    static func elementId(_ args: JSON) -> Int? {
+        if let i = args["id"]?.intValue { return i }
+        if let s = args["id"]?.stringValue, let i = Int(s.trimmingCharacters(in: .whitespaces)) { return i }
+        if let l = args["label"]?.stringValue, let i = Int(l.trimmingCharacters(in: .whitespaces)) { return i }
+        return nil
     }
 
     static func screenTarget(_ raw: String) -> ScreenTarget {

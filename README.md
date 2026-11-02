@@ -29,14 +29,21 @@ mic ──► Muse Voice Transcribe (ENDPOINTING) ──► utterance router ─
 * **Private waiting.** While waiting, "Hey Sirena" is detected with Apple's on-device speech recognition and
   the stream to Meta is paused: no audio leaves the Mac until she is awake (lock icon in the pill). Falls back
   to streaming if on-device recognition is unavailable; can be turned off in the menu.
-* **The "Sirena" rule.** A command only runs when the utterance starts with "Sirena" (or a close
-  misrecognition such as "Serena"). For 6 seconds after a command the next one works without the name;
-  the overlay shows a countdown ring. Background speech like "switch to Slack" does nothing.
+* **The "Sirena" rule.** A command runs when the utterance starts with "Sirena" (or a close misrecognition
+  such as "Serena"), or has a short command right next to the name ("wait Sirena", "Para, para Sirena, para").
+  For 8 seconds after a command (12 after "Hey Sirena"), counted from when you start speaking, the next one
+  works without the name; the overlay shows a countdown ring. Until 20 seconds after the last command,
+  navigation the fast path understands (scroll, tabs, apps, "first link") still works without the name.
+  Without the name, only speech that looks like a command runs: fillers ("okay", "uh"), questions, cut-off
+  commands ("switch to") and room chatter never reach the model. "again" / "more" repeat the last command.
+  Portuguese controls work too (para, espera, cancela, sim, não).
 * **Dictation.** "Sirena, type …" inserts just that text. "Sirena, start dictating" types everything you say
   (cleaned up by Muse Spark: filler words, false starts, punctuation, lists, tone adapted to the app) until
   "Sirena, stop". "Sirena, delete that", "Sirena, new line", "Sirena, undo" work while dictating.
 * **Confirmations.** Anything irreversible (sending a message, deleting, closing unsaved work) shows
-  "Send this message? Yes / Cancel" and waits for "yes" or "cancel" (Enter and Esc also work).
+  "Send “see you at 5” in WhatsApp? Yes / Cancel" and waits for "yes" or "cancel" (Enter and Esc also work).
+  A "yes" always does something: a question with no action behind it is never shown. "Sirena, send" sends what
+  is in the message box after that question.
 * **Numbers mode.** "Sirena, show numbers" puts a badge on every clickable element of the front window
   (from the Accessibility tree), then "click 7".
 * **Live vocabulary.** The recognizer gets the names of running apps, window titles, browser tab titles
@@ -83,7 +90,12 @@ mic ──► Muse Voice Transcribe (ENDPOINTING) ──► utterance router ─
 
 While the screenshot fallback works, other speech does not interrupt it: only "cancel", "stop" or the answer to its
 confirmation. Its confirmations name the item it will act on ("Click “Mark” (the first item in the “Chats” list) in
-WhatsApp?"), never a window or page title.
+WhatsApp?"), never a window or page title. It runs at most 6 steps and 30 seconds, only for requests that say what to
+do ("this one" or "more" are not enough), asks nothing for harmless steps, and says so when it could not act.
+
+Results pages: "first link", "the second one", "open the third result" open that result of the page in front
+without the model (navigation, ads and "skip to content" links are left out). "Close all tabs" always closes every
+tab of the window you see and leaves one empty tab.
 
 ## Requirements
 
@@ -130,6 +142,14 @@ Diagnostics that run inside the signed app, with its permissions:
 open -n build/Sirena.app --args --selftest-wake hey_sirena.wav /tmp/wake.txt   # on-device wake word
 open -n build/Sirena.app --args --selftest audio /tmp/audio.txt                 # voice-processing microphone
 open -n build/Sirena.app --args --selftest context /tmp/context.txt             # snapshot, screens, article text
+open -n build/Sirena.app --args --selftest tabs /tmp/tabs.txt                   # tab commands on a temporary Chrome window
+open -n build/Sirena.app --args --selftest results /tmp/results.txt             # "first / second result" on a temporary Google page
+open -n build/Sirena.app --args --selftest dictation /tmp/dictation.txt         # cleanup and lists with the real model, dry run
+open -n build/Sirena.app --args --selftest speculation /tmp/speculation.txt     # model commands with and without the early start
+open -n build/Sirena.app --args --selftest echo /tmp/echo.txt                   # plays a sentence aloud; what the recognizer hears with/without the echo gate
+open -n build/Sirena.app --args --selftest players /tmp/players.txt             # apps playing sound and their output devices
+open -n build/Sirena.app --args --selftest echo-sim /tmp/echo-sim.txt           # simulated music + your voice (nothing played): recognizer with/without
+swift run -c release sirena-cli echo-bench                                        # echo canceller + gate speed and scores on simulated music
 ```
 
 Set `SIRENA_DEBUG_DUMP=/some/dir` to write every model request and response body there.
@@ -141,7 +161,8 @@ System Settings pane:
 
 * **Microphone**, required.
 * **Accessibility**, required (clicks, typing, shortcuts, the element list).
-* **Screen Recording**, only for the screenshot fallback.
+* **Screen Recording**, for the screenshot fallback and to tell the Mac's own sound (music, videos) apart from
+  your voice.
 * **Automation**, to switch tabs in Chrome and Safari (macOS asks the first time a browser is controlled).
 
 ## Using Sirena
@@ -185,6 +206,20 @@ is connected to a phone). Sirena notices after three seconds, says "No sound fro
 <other microphone>" and switches. Noise reduction (Apple voice processing) works only on the system default
 input, so a microphone chosen this way is captured without it; set it as the input in System Settings → Sound to
 get noise reduction too.
+
+### Music and videos playing on the Mac
+
+Apple's echo cancellation only removes sound Sirena plays herself, and it is off whenever the microphone in use
+is not the system default. So while another app plays sound and Sirena listens (awake or waiting for "Hey
+Sirena"), she captures what the Mac plays (ScreenCaptureKit, audio only, her own voice left out). An echo
+canceller learns how the speakers reach the microphone and subtracts the music from it (about 19 dB less in
+tests); what is left is compared with what is playing every 10 ms, and stretches that hold only leftover music
+reach the recognizer as silence, so lyrics and videos are neither typed nor taken for commands. Your voice passes,
+cleaned of most of the music, even when the music is louder than you in the microphone (12 dB louder in tests:
+“Sirena, scroll down” still came through). The canceller needs a few seconds of music to learn the room; what she
+learns about each microphone and speaker pair is kept. While music plays, speech reaches the recognizer about
+0.15 s later. macOS shows its screen-recording indicator while this runs. "Ignore music and videos playing on this Mac" in the menu turns it off.
+With headphones nothing reaches the microphone and nothing needs to be done.
 
 ### On-device wake word
 

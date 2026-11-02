@@ -29,9 +29,9 @@ public struct ScreenSnapshot {
         if let f = focusedDescription { lines.append("Focused element: \(f)") }
         if let sc = screensLine { lines.append(sc) }
         if !elements.isEmpty {
-            lines.append("Interactive elements in the front window (id kind \"label\"):")
+            lines.append("Interactive elements in the front window (id kind \"label\" [state]):")
             for e in elements.prefix(maxElements) {
-                lines.append("  \(e.id) \(e.kind) \"\(e.name)\"" + (e.isFocused ? " (focused)" : ""))
+                lines.append("  \(e.id) \(e.kind) \"\(e.name)\"" + (e.state.map { " [\($0)]" } ?? "") + (e.isFocused ? " (focused)" : ""))
             }
         }
         return lines.joined(separator: "\n")
@@ -42,8 +42,19 @@ public final class ScreenContext {
     public var customVocabulary: () -> [String] = { [] }
     private var lastSnapshot: ScreenSnapshot?
     private var lastBrowserInfo: (pid: pid_t, info: BrowserInfo, at: Date)?
+    /// Labels of the front window's elements from the last snapshot that collected them (vocabulary hints).
+    private var lastElementLabels: (pid: pid_t, labels: [String], at: Date)?
 
     public init() {}
+
+    /// Front app and running apps only: all most actions need, with no Accessibility walk and no AppleScript.
+    /// Actions that need more (elements, tabs) fetch it themselves.
+    public func lightSnapshot() -> ScreenSnapshot {
+        var snap = ScreenSnapshot()
+        snap.apps = RunningApps.list()
+        snap.frontApp = RunningApps.frontmost()
+        return snap
+    }
 
     /// Builds a snapshot. Element collection costs 50–500 ms, so it is optional.
     public func snapshot(includeElements: Bool, includeBrowser: Bool = true, maxElements: Int = 150) -> ScreenSnapshot {
@@ -68,6 +79,9 @@ public final class ScreenContext {
                 }
                 if includeElements, let w = win {
                     snap.elements = AX.collectInteractive(in: w, within: w.frame, maxCount: maxElements)
+                    let labels = snap.elements.filter { ["button", "link", "tab", "menuitem", "switch", "checkbox", "row"].contains($0.kind) }
+                        .map(\.name).filter { (2...30).contains($0.count) && $0.rangeOfCharacter(from: .letters) != nil }
+                    lastElementLabels = (front.pid, labels, Date())
                 }
             }
             if includeBrowser, BrowserControl.isBrowser(front.bundleId) {
@@ -112,6 +126,10 @@ public final class ScreenContext {
         if let b = snap.browser {
             for tab in b.tabs.prefix(15) { if let w = titleWords(tab.title) { out.append(w) } }
         }
-        return Array(ASRKeywords.sanitize(out).prefix(60))
+        // Buttons and links seen in the front window lately ("Enviar", "Bluetooth"), so "click …" is heard right.
+        if let e = lastElementLabels, e.pid == snap.frontApp?.pid, Date().timeIntervalSince(e.at) < 120 {
+            out += e.labels.prefix(20)
+        }
+        return Array(ASRKeywords.sanitize(out).prefix(80))
     }
 }

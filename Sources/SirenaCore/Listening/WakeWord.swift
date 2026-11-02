@@ -8,7 +8,7 @@ public enum WakeWord {
         "syrena", "cyrena", "cirena", "sirene", "sirenia", "sirana", "sorena", "serene", "sirenah", "serenah",
         "siren a", "serene a", "siren",
     ]
-    static let leadIns = ["hey", "hi", "ok", "okay", "yo", "hello", "a", "oh", "hay", "hey there"]
+    static let leadIns = ["hey", "hi", "ok", "okay", "yo", "hello", "a", "oh", "hay", "hey there", "ah", "eh", "uh", "um", "olá", "ola", "ei"]
 
     private static let namePattern: String = {
         let alts = nameVariants.sorted { $0.count > $1.count }.map { NSRegularExpression.escapedPattern(for: $0).replacingOccurrences(of: " ", with: "\\s+") }

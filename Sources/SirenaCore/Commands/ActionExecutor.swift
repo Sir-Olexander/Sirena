@@ -18,6 +18,8 @@ public enum ExecutionError: Error, LocalizedError, Equatable {
     case elementNotFound(String)
     case failed(String)
     case needsScreen(String)
+    /// A confirmation question with no action after it: a "yes" would do nothing.
+    case emptyConfirmation(String)
 
     public var errorDescription: String? {
         switch self {
@@ -25,6 +27,7 @@ public enum ExecutionError: Error, LocalizedError, Equatable {
         case .elementNotFound(let s): return "No element called “\(s)”"
         case .failed(let s): return s
         case .needsScreen(let s): return "Needs a look at the screen: \(s)"
+        case .emptyConfirmation(let q): return "I asked “\(q)” without knowing what to do after a yes"
         }
     }
 }
@@ -35,6 +38,8 @@ enum UndoRecord {
     case tabSwitched(browser: BrowserInfo, previousIndex: Int)
     case tabsClosed(browser: AppInfo, count: Int)
     case keyPressed
+    /// A link was followed: undo goes back.
+    case navigated
     case generic
 }
 
@@ -114,12 +119,20 @@ public final class ActionExecutor {
     // MARK: - Synchronous execution
 
     private func run(_ actions: [Action], snapshot: ScreenSnapshot?, rest: [Action], done: [String]) throws -> ExecutionResult {
-        var snap = snapshot ?? context.snapshot(includeElements: false)
+        var snap = snapshot ?? context.lightSnapshot()
         var summaries: [String] = done
         for (i, action) in actions.enumerated() {
             if case .confirmThen(let message, let inner) = action {
                 let remaining = inner + Array(actions.dropFirst(i + 1)) + rest
-                let question = ConfirmationText.question(message, before: Array(actions.prefix(i)), after: remaining, appName: appNameForConfirmations())
+                // A "yes" must always do something.
+                guard remaining.contains(where: { !ConfirmationText.isFiller($0) }) else { throw ExecutionError.emptyConfirmation(message) }
+                let before = Array(actions.prefix(i))
+                var fieldText: String?
+                if remaining.first(where: { !ConfirmationText.isFiller($0) }) == .pressReturnToSend,
+                   !before.contains(where: { if case .typeText = $0 { return true }; return false }) {
+                    fieldText = ActionExecutor.composerText()
+                }
+                let question = ConfirmationText.question(message, before: before, after: remaining, appName: appNameForConfirmations(), fieldText: fieldText)
                 return ExecutionResult(summary: summaries.joined(separator: " → "), pendingConfirmation: PendingConfirmation(message: question, actions: remaining))
             }
             let s = try perform(action, snapshot: &snap)
@@ -129,6 +142,13 @@ public final class ActionExecutor {
     }
 
     private func frontApp() -> AppInfo? { RunningApps.frontmost() }
+
+    /// Text in the focused message box, for "Send “…”?" when Sirena did not type it herself.
+    static func composerText() -> String? {
+        guard let el = AX.focusedTextElement(), ["AXTextArea", "AXTextField", "AXComboBox"].contains(el.role ?? "") || el.bool("AXEditable") == true,
+              el.role != "AXWebArea", let v = el.valueString?.trimmingCharacters(in: .whitespacesAndNewlines), !v.isEmpty, v.count <= 2000 else { return nil }
+        return v
+    }
 
     private func perform(_ action: Action, snapshot snap: inout ScreenSnapshot) throws -> String {
         Log.commands.info("perform: \(String(describing: action), privacy: .public)")
@@ -158,6 +178,7 @@ public final class ActionExecutor {
         case .launchApp(let name):
             if let app = RunningApps.match(name, in: snap.apps) { return activate(app, snapshot: &snap) }
             guard let url = RunningApps.installedAppURL(named: name) else { throw ExecutionError.unresolved(name) }
+            if let app = RunningApps.running(at: url, in: snap.apps) { return activate(app, snapshot: &snap) }
             RunningApps.launch(url: url)
             return "Opening \(url.deletingPathExtension().lastPathComponent)"
         case .switchTab(let target):
@@ -176,11 +197,13 @@ public final class ActionExecutor {
             } else if let url = RunningApps.installedAppURL(named: name) {
                 RunningApps.launch(url: url)
                 usleep(1_500_000)
-                snap = context.snapshot(includeElements: false, includeBrowser: false)
+                snap = context.lightSnapshot()
             } else {
                 throw ExecutionError.unresolved(name)
             }
             return try perform(inner, snapshot: &snap)
+        case .openResult(let n):
+            return try openResult(n, snapshot: snap)
         case .copyText(let q), .selectText(let q):
             var isCopy = false
             if case .copyText = action { isCopy = true }
@@ -253,6 +276,22 @@ public final class ActionExecutor {
             return "Clicked \(n) (\(el.name.prefix(30)))"
         case .focusElement(let label):
             return try focus(label: label, snapshot: &snap)
+        case .clickId(let id, let label), .focusId(let id, let label):
+            var isClick = false
+            if case .clickId = action { isClick = true }
+            // The id is only meaningful in the snapshot the model saw; without it, fall back to the label.
+            guard let el = snap.elements.first(where: { $0.id == id }) else {
+                if let l = label, !l.isEmpty { return isClick ? try click(label: l, snapshot: &snap) : try focus(label: l, snapshot: &snap) }
+                throw ExecutionError.elementNotFound("element \(id)")
+            }
+            if isClick {
+                AX.click(el)
+                undoStack.append(.generic)
+                let name = el.name.isEmpty ? "\(el.kind) \(id)" : "“\(el.name.prefix(30))”"
+                return "Clicked \(name)" + (el.state.map { $0 == "on" ? " (was on)" : ($0 == "off" ? " (was off)" : "") } ?? "")
+            }
+            AX.focus(el)
+            return "Focused “\(el.name.prefix(30))”"
         case .focusComposer:
             return focusComposer(snapshot: &snap)
         case .typeText(let text):
@@ -279,7 +318,7 @@ public final class ActionExecutor {
             throw ExecutionError.needsScreen(goal)
         case .wait, .turnOff, .startDictation, .stopDictation, .showNumbers, .hideNumbers, .undo, .cancel, .newLine, .deleteLastChunk,
              .readSelection, .readArticle, .readPage, .readingControl, .forgetLearnedShortcut,
-             .openNotesWindow, .openShortcutsWindow, .openHistoryWindow, .readText:
+             .openNotesWindow, .openShortcutsWindow, .openHistoryWindow, .readText, .repeatLast:
             return ""   // control actions are handled by the listening controller
         }
     }
@@ -301,7 +340,7 @@ public final class ActionExecutor {
         // An app with no windows (e.g. Chrome after its last window closed): reopen like the Dock does.
         let reopened = RunningApps.ensureWindow(app)
         undoStack.append(.appSwitched(previous: previous))
-        snap = context.snapshot(includeElements: false, includeBrowser: false)
+        snap = context.lightSnapshot()
         numbers.frontAppChanged(pid: app.pid)
         return reopened ? "Opened a new \(app.name) window" : "Switched to \(app.name)"
     }
@@ -314,6 +353,7 @@ public final class ActionExecutor {
         if let m = WakeWord.normalize(target).firstMatch("^(.+?)\\s+(?:app|application)$") { target = m[1]; wantsApp = true }
         if let app = RunningApps.exactMatch(target, in: snap.apps) { return activate(app, snapshot: &snap) }
         if let url = RunningApps.installedAppURL(exactly: target) {
+            if let app = RunningApps.running(at: url, in: snap.apps) { return activate(app, snapshot: &snap) }
             RunningApps.launch(url: url)
             return "Opening \(url.deletingPathExtension().lastPathComponent)"
         }
@@ -388,8 +428,9 @@ public final class ActionExecutor {
         }
         // 4. a website by name ("switch to YouTube" with no YouTube tab open)
         if let url = Websites.url(for: target) { return openWebsite(url, snapshot: &snap) }
-        // 5. an installed app
+        // 5. an installed app (already running under another name: "Visual Studio" is "Code")
         if let url = RunningApps.installedAppURL(named: target) {
+            if let app = RunningApps.running(at: url, in: snap.apps) { return activate(app, snapshot: &snap) }
             RunningApps.launch(url: url)
             return "Opening \(url.deletingPathExtension().lastPathComponent)"
         }
@@ -408,8 +449,18 @@ public final class ActionExecutor {
         guard let info = BrowserControl.info(for: browser) else {
             throw ExecutionError.failed("\(browser.name) did not share its tabs — allow Sirena under System Settings → Privacy & Security → Automation")
         }
+        Log.commands.notice("close tabs \(String(describing: set), privacy: .public) in window \(info.windowId ?? -1) (\(info.tabs.count) tabs, active \(info.activeIndex), other windows: \(info.otherWindows))")
+        if set == .all {
+            guard let n = BrowserControl.closeAllTabs(in: info) else { throw ExecutionError.failed("\(browser.name) refused to close the tabs") }
+            context.invalidateBrowserCache()
+            undoStack.append(.tabsClosed(browser: browser, count: n))
+            return "Closed all \(n) tab\(n == 1 ? "" : "s"), one empty tab left"
+        }
         let (close, keep) = BrowserControl.indices(of: set, count: info.tabs.count, active: info.activeIndex)
-        guard !close.isEmpty else { return "No tabs to close" }
+        guard !close.isEmpty else {
+            let title = info.activeTab.map { "“\(AppTabs.cleanTitle($0.title).prefix(30))”" } ?? "this window"
+            return "No tabs to close: the window with \(title) has \(info.tabs.count) tab\(info.tabs.count == 1 ? "" : "s")"
+        }
         guard BrowserControl.closeTabs(close, in: info) else { throw ExecutionError.failed("\(browser.name) refused to close the tabs") }
         context.invalidateBrowserCache()
         // The kept tab is now first when every other tab was closed; make sure it is the active one.
@@ -424,6 +475,7 @@ public final class ActionExecutor {
         case .right: what = "to the right"
         case .left: what = "to the left"
         case .others, .allExcept: what = "other"
+        case .all: what = "in all"
         }
         return what == "other" ? "Closed \(n) other tab\(n == 1 ? "" : "s")" : "Closed \(n) tab\(n == 1 ? "" : "s") \(what)"
     }
@@ -451,6 +503,9 @@ public final class ActionExecutor {
     /// VS Code-style editors: ⌥⌘T closes the other editors; the command palette closes to the right / left.
     private func closeEditorTabs(_ set: TabSet, app: AppInfo) -> String {
         switch set {
+        case .all:
+            Keyboard.press([KeyCombo("k", [.command]), KeyCombo("w", [.command])])   // Close All Editors
+            return "\(app.name): closed all tabs"
         case .others:
             Keyboard.press(KeyCombo("t", [.option, .command]))
             return "\(app.name): closed the other tabs"
@@ -469,6 +524,8 @@ public final class ActionExecutor {
     /// Apps with a native tab bar: close each tab (its close button, else select it and ⌘W), highest first.
     private func closeNativeTabs(_ set: TabSet, app: AppInfo) throws -> String {
         guard let tabs = AppTabs.readNative(pid: app.pid) else { return "\(app.name) has only one tab" }
+        // Apps with window tabs cannot keep an empty tab: "all" keeps the current one.
+        let set = set == .all ? .others : set
         let (close, keep) = BrowserControl.indices(of: set, count: tabs.tabs.count, active: max(tabs.active, 1))
         guard !close.isEmpty else { return "No tabs to close" }
         let activeTitle = tabs.active > 0 ? tabs.titles[tabs.active - 1] : nil
@@ -542,6 +599,21 @@ public final class ActionExecutor {
     }
 
     private func switchBrowserTab(_ target: TabTarget, browser: AppInfo) throws -> String {
+        // By position: one AppleScript call that reads the tab count and switches (no tab listing first).
+        if case .title = target {} else {
+            switch BrowserControl.switchTab(target, in: browser) {
+            case .switched(let previous, let index, let title):
+                context.invalidateBrowserCache()
+                if let kind = BrowserControl.kind(for: browser.bundleId) {
+                    undoStack.append(.tabSwitched(browser: BrowserInfo(app: browser, kind: kind, tabs: [], activeIndex: previous), previousIndex: previous))
+                }
+                return "Tab \(index) “\(title.prefix(30))”"
+            case .noSuchTab(let count):
+                throw ExecutionError.failed("\(browser.name) has \(count) tab\(count == 1 ? "" : "s")")
+            case .unavailable:
+                return try switchTabWithKeys(target)
+            }
+        }
         if let info = context.browserInfo(for: browser) {
             guard let idx = BrowserControl.resolve(target, in: info) else {
                 if case .title(let t) = target { throw ExecutionError.unresolved(t) }
@@ -553,7 +625,11 @@ public final class ActionExecutor {
             let title = info.tabs.first { $0.index == idx }?.title ?? ""
             return "Tab \(idx) “\(title.prefix(30))”"
         }
-        // Without Automation permission fall back to keyboard shortcuts.
+        return try switchTabWithKeys(target)
+    }
+
+    /// Without Automation permission: the browser's own shortcuts.
+    private func switchTabWithKeys(_ target: TabTarget) throws -> String {
         switch target {
         case .next: Keyboard.press(KeyCombo("]", [.command, .shift])); return "Next tab"
         case .previous: Keyboard.press(KeyCombo("[", [.command, .shift])); return "Previous tab"
@@ -583,6 +659,24 @@ public final class ActionExecutor {
             }
         }
         return false
+    }
+
+    // MARK: - Results and links on a page
+
+    /// The Nth link of the page's main content; with no web page in front it is left to the model.
+    private func openResult(_ n: Int, snapshot snap: ScreenSnapshot) throws -> String {
+        guard let front = snap.frontApp else { throw ExecutionError.unresolved("result \(n)") }
+        let links = PageLinks.links(pid: front.pid)
+        guard !links.isEmpty else { throw ExecutionError.unresolved(n == -1 ? "the last result" : "result \(n)") }
+        let i = n == -1 ? links.count - 1 : n - 1
+        guard links.indices.contains(i) else { throw ExecutionError.failed("This page shows \(links.count) result\(links.count == 1 ? "" : "s")") }
+        let link = links[i]
+        if !(link.element?.perform(kAXPressAction) ?? false) {
+            Mouse.click(at: CGPoint(x: link.frame.minX + min(20, link.frame.width / 2), y: link.frame.midY))
+        }
+        context.invalidateBrowserCache()
+        undoStack.append(.navigated)
+        return "Opened “\(link.title.prefix(40))”"
     }
 
     // MARK: - Copy / select text on screen
@@ -702,6 +796,9 @@ public final class ActionExecutor {
             RunningApps.activate(browser.app)
             BrowserControl.activateTab(index: previousIndex, in: browser)
             return "Back to tab \(previousIndex)"
+        case .navigated:
+            Keyboard.press(KeyCombo("[", [.command]))
+            return "Back"
         case .keyPressed, .generic:
             Keyboard.press(KeyCombo("z", [.command]))
             return "Undo (⌘Z)"

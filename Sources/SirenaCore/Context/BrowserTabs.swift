@@ -13,7 +13,14 @@ public struct BrowserInfo: Equatable {
     public let kind: Kind
     public let tabs: [TabInfo]
     public let activeIndex: Int
+    /// AppleScript id of the window these tabs belong to (nil: the front window).
+    public var windowId: Int? = nil
+    /// The browser has more than one window.
+    public var otherWindows = false
     public var activeTab: TabInfo? { tabs.first { $0.index == activeIndex } }
+
+    /// How to name the window in AppleScript.
+    var windowRef: String { windowId.map { "window id \($0)" } ?? "front window" }
 }
 
 /// Browser tab discovery and switching through AppleScript (needs the Automation permission once per browser).
@@ -60,62 +67,129 @@ public enum BrowserControl {
         app.app.bundleURL?.deletingPathExtension().lastPathComponent ?? app.name
     }
 
+    // MARK: Which window
+
+    /// Title of the window the user sees in this browser (its focused window, through Accessibility), cleaned of
+    /// unread counters and the browser name, so it can be matched against the active tab of each window.
+    static func visibleWindowTitle(_ app: AppInfo) -> String? {
+        guard AX.isTrusted, let t = AX.frontWindow(pid: app.pid)?.title else { return nil }
+        let clean = AppTabs.cleanTitle(t)
+        return clean.count >= 2 ? clean : nil
+    }
+
+    static func appleScriptString(_ s: String) -> String {
+        "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+    }
+
+    /// AppleScript that sets `w` to the window the user sees: AppleScript's "front window" can be another one
+    /// (a window on the other screen, a pop-up), so the window whose active tab matches the focused window's
+    /// title wins; the front window otherwise.
+    static func windowSelector(kind: BrowserInfo.Kind, wanted: String?) -> String {
+        guard let wanted, !wanted.isEmpty else { return "set w to front window" }
+        let titleExpr = kind == .chromium ? "title of active tab of x" : "name of current tab of x"
+        return """
+        set w to front window
+            if (count of windows) > 1 then
+                repeat with x in windows
+                    try
+                        if (\(titleExpr)) contains \(appleScriptString(wanted)) then
+                            set w to window id (id of x)
+                            exit repeat
+                        end if
+                    end try
+                end repeat
+            end if
+        """
+    }
+
     public static func info(for app: AppInfo) -> BrowserInfo? {
         guard let kind = kind(for: app.bundleId) else { return nil }
         let name = appleScriptName(for: app)
-        let source: String
-        switch kind {
-        case .chromium:
-            source = """
-            tell application "\(name)"
-                if (count of windows) = 0 then return ""
-                set out to (active tab index of front window as text)
-                set i to 0
-                repeat with t in tabs of front window
-                    set i to i + 1
-                    set out to out & linefeed & (title of t) & tab & (URL of t)
-                    if i ≥ 40 then exit repeat
-                end repeat
-                return out
-            end tell
-            """
-        case .safari:
-            source = """
-            tell application "\(name)"
-                if (count of windows) = 0 then return ""
-                set out to (index of current tab of front window as text)
-                set i to 0
-                repeat with t in tabs of front window
-                    set i to i + 1
-                    set out to out & linefeed & (name of t) & tab & (URL of t)
-                    if i ≥ 40 then exit repeat
-                end repeat
-                return out
-            end tell
-            """
-        }
+        let (activeExpr, titleOf) = kind == .chromium ? ("active tab index of w", "title of t") : ("index of current tab of w", "name of t")
+        let source = """
+        tell application "\(name)"
+            if (count of windows) = 0 then return ""
+            \(windowSelector(kind: kind, wanted: visibleWindowTitle(app)))
+            set out to (\(activeExpr) as text) & (character id 9) & (id of w as text) & (character id 9) & ((count of windows) as text)
+            set i to 0
+            repeat with t in tabs of w
+                set i to i + 1
+                set out to out & linefeed & (\(titleOf)) & (character id 9) & (URL of t)
+                if i ≥ 40 then exit repeat
+            end repeat
+            return out
+        end tell
+        """
         guard let text = run(source), !text.isEmpty else { return nil }
         let lines = text.components(separatedBy: "\n")
-        let active = Int(lines.first ?? "") ?? 1
+        let head = (lines.first ?? "").components(separatedBy: "\t")
+        let active = Int(head.first ?? "") ?? 1
         var tabs: [TabInfo] = []
         for (i, line) in lines.dropFirst().enumerated() {
             let parts = line.components(separatedBy: "\t")
             tabs.append(TabInfo(index: i + 1, title: parts.first ?? "", url: parts.count > 1 ? parts[1] : ""))
         }
-        return BrowserInfo(app: app, kind: kind, tabs: tabs, activeIndex: active)
+        var info = BrowserInfo(app: app, kind: kind, tabs: tabs, activeIndex: active)
+        info.windowId = head.count > 1 ? Int(head[1]) : nil
+        info.otherWindows = (head.count > 2 ? Int(head[2]) : nil).map { $0 > 1 } ?? false
+        return info
     }
 
     @discardableResult
     public static func activateTab(index: Int, in browser: BrowserInfo) -> Bool {
         let name = appleScriptName(for: browser.app)
+        let w = browser.windowRef
         let source: String
         switch browser.kind {
         case .chromium:
-            source = "tell application \"\(name)\" to set active tab index of front window to \(index)"
+            source = "tell application \"\(name)\" to set active tab index of \(w) to \(index)"
         case .safari:
-            source = "tell application \"\(name)\" to set current tab of front window to tab \(index) of front window"
+            source = "tell application \"\(name)\" to set current tab of \(w) to tab \(index) of \(w)"
         }
         return run(source) != nil || true
+    }
+
+    public enum TabSwitch: Equatable {
+        /// Switched: the tab that was active before, the new one and its title.
+        case switched(previous: Int, index: Int, title: String)
+        case noSuchTab(count: Int)
+        /// The browser did not answer (no Automation permission, no window).
+        case unavailable
+    }
+
+    /// Switches to a tab by position in one AppleScript call (count, active index and switch together).
+    public static func switchTab(_ target: TabTarget, in app: AppInfo) -> TabSwitch {
+        guard let kind = kind(for: app.bundleId) else { return .unavailable }
+        let expr: String
+        switch target {
+        case .index(let n): expr = "\(n)"
+        case .first: expr = "1"
+        case .last: expr = "n"
+        case .next: expr = "(p mod n) + 1"
+        case .previous: expr = "((p - 2 + n) mod n) + 1"
+        case .title: return .unavailable
+        }
+        let name = appleScriptName(for: app)
+        let (getActive, setActive, activeTitle) = kind == .chromium
+            ? ("active tab index of w", "set active tab index of w to i", "title of active tab of w")
+            : ("index of current tab of w", "set current tab of w to tab i of w", "name of current tab of w")
+        let source = """
+        tell application "\(name)"
+            if (count of windows) = 0 then return ""
+            \(windowSelector(kind: kind, wanted: visibleWindowTitle(app)))
+            set n to count of tabs of w
+            set p to \(getActive)
+            set i to \(expr)
+            if i < 1 or i > n then return "none" & (character id 9) & (n as text)
+            \(setActive)
+            return (p as text) & (character id 9) & (i as text) & (character id 9) & (\(activeTitle))
+        end tell
+        """
+        guard let out = run(source), !out.isEmpty else { return .unavailable }
+        let parts = out.components(separatedBy: "\t")
+        if parts.first == "none" { return .noSuchTab(count: Int(parts.count > 1 ? parts[1] : "") ?? 0) }
+        guard parts.count >= 2, let p = Int(parts[0]), let i = Int(parts[1]) else { return .unavailable }
+        return .switched(previous: p, index: i, title: parts.count > 2 ? parts[2...].joined(separator: "\t") : "")
     }
 
     /// Closes tabs of the front window by 1-based index (highest first, so the other indices stay valid).
@@ -128,12 +202,32 @@ public enum BrowserControl {
         let lines = sorted.map { "    close tab \($0) of w" }.joined(separator: "\n")
         let source = """
         tell application "\(name)"
-            set w to front window
+            set w to \(browser.windowRef)
         \(lines)
             return "ok"
         end tell
         """
         return run(source) == "ok"
+    }
+
+    /// "Close all tabs": every tab of the window closes and one new, empty tab stays, so the window (and undo
+    /// with ⌘⇧T) survive. Returns the number of tabs closed, nil when the browser refused.
+    public static func closeAllTabs(in browser: BrowserInfo) -> Int? {
+        let name = appleScriptName(for: browser.app)
+        let makeActive = browser.kind == .safari ? "set current tab of w to last tab of w" : ""
+        let source = """
+        tell application "\(name)"
+            set w to \(browser.windowRef)
+            make new tab at end of tabs of w
+            \(makeActive)
+            set n to count of tabs of w
+            repeat with i from (n - 1) to 1 by -1
+                close tab i of w
+            end repeat
+            return ((n - 1) as text)
+        end tell
+        """
+        return run(source).flatMap { Int($0) }
     }
 
     /// Tabs a `TabSet` covers, given the current tab list. Pure, so it can be tested.
@@ -144,6 +238,7 @@ public enum BrowserControl {
         case .right: return (all.filter { $0 > active }, nil)
         case .left: return (all.filter { $0 < active }, nil)
         case .others: return (all.filter { $0 != active }, active)
+        case .all: return (all, nil)
         case .allExcept(let t):
             let keep: Int?
             switch t {

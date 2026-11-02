@@ -131,6 +131,8 @@ public struct UIElementInfo: Equatable {
     public let frame: CGRect
     public let isFocused: Bool
     public let isEnabled: Bool
+    /// "on" / "off" for switches and checkboxes, "selected" for the selected tab or option.
+    public var state: String? = nil
 
     public var kind: String {
         switch role {
@@ -203,12 +205,19 @@ public enum AX {
             var isInteractive = interactiveRoles.contains(role) || (pressable && ["AXGroup", "AXImage", "AXStaticText", "AXCell", "AXRow", "AXHeading"].contains(role))
             if role == "AXStaticText", !pressable { isInteractive = false }
             if isInteractive, visible, let f = frame, el.isEnabled || true {
-                let name = el.label
+                let isToggle = toggleRoles.contains(role) || ["AXSwitch", "AXToggle"].contains(el.subrole ?? "")
+                var name = el.label
+                // Switches and checkboxes often have no label of their own: use the text that titles them.
+                if name.isEmpty, isToggle || role == "AXPopUpButton" || role == "AXSlider", let titleEl = el.element("AXTitleUIElement") {
+                    name = titleEl.label
+                }
                 let dup = seenFrames.contains { $0.equalTo(f) }
-                if !dup, (!name.isEmpty || el.isTextInputRole) {
+                if !dup, (!name.isEmpty || el.isTextInputRole || isToggle) {
                     seenFrames.append(f)
-                    result.append(UIElementInfo(id: nextId, element: el, role: role, subrole: el.subrole, name: String(name.prefix(80)),
-                                                frame: f, isFocused: el.isFocused, isEnabled: el.isEnabled))
+                    var info = UIElementInfo(id: nextId, element: el, role: role, subrole: el.subrole, name: String(name.prefix(80)),
+                                             frame: f, isFocused: el.isFocused, isEnabled: el.isEnabled)
+                    info.state = AX.state(of: el, role: role, isToggle: isToggle)
+                    result.append(info)
                     nextId += 1
                 }
             }
@@ -221,17 +230,32 @@ public enum AX {
         return result
     }
 
+    static let toggleRoles: Set<String> = ["AXCheckBox", "AXSwitch", "AXToggle"]
+
+    /// "on" / "off" for switches and checkboxes, "selected" for a selected tab or radio button.
+    static func state(of el: AXElement, role: String, isToggle: Bool) -> String? {
+        let value = (el.attribute(kAXValueAttribute) as? NSNumber)?.intValue
+        if isToggle { return value.map { $0 == 0 ? "off" : "on" } }
+        if role == "AXRadioButton" || role == "AXTab" { return value == 1 || el.bool(kAXSelectedAttribute) == true ? "selected" : nil }
+        return nil
+    }
+
     /// Finds the first element whose label matches `query` (fuzzy).
     public static func find(label query: String, in elements: [UIElementInfo], preferInputs: Bool = false) -> UIElementInfo? {
-        var best: (UIElementInfo, Double)?
-        for e in elements where !e.name.isEmpty {
-            var s = Fuzzy.score(query: query, candidate: e.name)
-            if preferInputs, e.isTextInput { s += 0.1 }
-            if !e.isEnabled { s -= 0.2 }
-            if best == nil || s > best!.1 { best = (e, s) }
+        func best(_ q: String) -> (UIElementInfo, Double)? {
+            var best: (UIElementInfo, Double)?
+            for e in elements where !e.name.isEmpty {
+                var s = Fuzzy.score(query: q, candidate: e.name)
+                if preferInputs, e.isTextInput { s += 0.1 }
+                if !e.isEnabled { s -= 0.2 }
+                if best == nil || s > best!.1 { best = (e, s) }
+            }
+            return best
         }
-        if let b = best, b.1 >= 0.6 { return b.0 }
-        return nil
+        if let b = best(query), b.1 >= 0.6 { return b.0 }
+        // "click send" on a Mac in Portuguese: the same label in the other language.
+        let translated = LabelSynonyms.alternatives(query).compactMap(best).filter { $0.1 >= 0.8 }
+        return translated.max { $0.1 < $1.1 }?.0
     }
 
     /// Clicks an element: AXPress first, then a synthetic click at its center.

@@ -87,7 +87,7 @@ public enum AppTabs {
         switch set {
         case .right: return "Close Editors to the Right in Group"
         case .left: return "Close Editors to the Left in Group"
-        case .others, .allExcept: return nil   // ⌥⌘T
+        case .others, .allExcept, .all: return nil   // ⌥⌘T, ⌘K ⌘W
         }
     }
 

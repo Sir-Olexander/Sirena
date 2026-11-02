@@ -72,12 +72,50 @@ public enum FastPathParser {
 
     // MARK: Entry point
 
-    /// Lowercased command without punctuation and polite lead-ins ("please", "can you"…).
+    /// Words people put before a command that carry no meaning for it ("okay scroll down", "uh, next tab").
+    static let leadingFillers = "(?:please|can you|could you|would you|will you|i want you to|i want to|let's|lets|go ahead and|now|just|"
+        + "um+|uh+|uhm+|erm+|er|ah+|eh|hmm+|mm+ hmm|mm+|okay|ok|oh|hey|alright|all right|so|and then|and|then|well|yeah|yo|listen|"
+        + "então|pronto|bom|tá|ok então|olha|e)"
+    static let trailingFillers = "(?:please|okay|ok|thanks|thank you|now|then|por favor|obrigado|obrigada)"
+    private static let leadingFillerRegex = try! NSRegularExpression(pattern: "^[\\s,.!;:-]*" + leadingFillers + "(?=[\\s,.!?;:-]|$)[\\s,.!;:-]*", options: [.caseInsensitive])
+
+    /// Removes filler words at the start of the raw text, keeping its casing ("Okay, type Hello" → "type Hello").
+    static func stripLeadingFillers(_ raw: String) -> String {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        for _ in 0..<6 {
+            let ns = s as NSString
+            guard let m = leadingFillerRegex.firstMatch(in: s, range: NSRange(location: 0, length: ns.length)), m.range.length > 0 else { break }
+            s = ns.substring(from: m.range.location + m.range.length)
+        }
+        return s
+    }
+
+    /// "close close" → "close", "turn off turn off" → "turn off": a stutter or a repeated start.
+    static func collapseLeadingRepeat(_ t: String) -> String {
+        var words = t.split(separator: " ").map(String.init)
+        var changed = true
+        while changed {
+            changed = false
+            for n in stride(from: min(4, words.count / 2), through: 1, by: -1) where Array(words[0..<n]) == Array(words[n..<(2 * n)]) {
+                words.removeFirst(n)
+                changed = true
+                break
+            }
+        }
+        return words.joined(separator: " ")
+    }
+
+    /// Lowercased command without punctuation, fillers, polite lead-ins ("please", "can you", "okay"…) and stutters.
     public static func normalize(_ raw: String) -> String {
-        WakeWord.normalize(raw.trimmingCharacters(in: .whitespacesAndNewlines))
-            .replacingOccurrences(of: "^(?:please|can you|could you|would you|will you|i want you to|i want to|let's|lets|go ahead and|now|just|um|uh|so)\\s+", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "\\s+please$", with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespaces)
+        var t = WakeWord.normalize(stripLeadingFillers(raw))
+        t = collapseLeadingRepeat(t)
+        t = WakeWord.normalize(stripLeadingFillers(t))
+        for _ in 0..<3 {
+            let next = t.replacingOccurrences(of: "\\s+" + trailingFillers + "$", with: "", options: .regularExpression)
+            if next == t { break }
+            t = next
+        }
+        return t.trimmingCharacters(in: .whitespaces)
     }
 
     /// Sirena's own controls only (wait, stop, dictation, numbers, reading…), or nil.
@@ -100,8 +138,53 @@ public enum FastPathParser {
         guard !t.isEmpty else { return nil }
 
         if let c = control(t, context: context) { return c }
+        if let c = misheardSearch(text, t, context: context) { return c }
         if let c = parseSingle(text, t, context: context) { return c }
         return compound(text, context: context)
+    }
+
+    /// Commands that may run without the name after the follow-up window: they only move around (scroll, tabs,
+    /// apps, navigation keys, clicks on harmless labels) and never send, close, delete, type, search or edit.
+    public static func isSafeWithoutName(_ parsed: ParsedCommand) -> Bool {
+        !parsed.actions.isEmpty && parsed.actions.allSatisfy(isSafeWithoutName)
+    }
+
+    static let navigationKeys: Set<String> = ["up", "down", "left", "right", "pageup", "pagedown", "home", "end", "escape", "space", "tab"]
+
+    static func isSafeWithoutName(_ a: Action) -> Bool {
+        switch a {
+        case .scroll, .scrollTo, .switchTab, .newTab, .reopenTab, .goBack, .goForward, .switchTo, .activateApp, .open, .focusScreen,
+             .moveWindowToScreen, .mediaKey, .zoomWindow, .clickNumber, .showNumbers, .hideNumbers, .pause, .readingControl,
+             .copyText, .selectText, .repeatLast, .openResult:
+            return true
+        case .inApp(_, let inner): return isSafeWithoutName(inner)
+        case .clickElement(let label): return !Action.irreversibleLabel(label)
+        case .pressKeys(let k): return k.modifiers.isSubset(of: [.shift]) && navigationKeys.contains(k.key)
+        default: return false
+        }
+    }
+
+    /// The recognizer sometimes hears "Sirena" as "search": "search switch to tab number four" is the tab command,
+    /// "search google.com" opens the site, "search on the URL WhatsApp web" opens that site.
+    static func misheardSearch(_ raw: String, _ t: String, context: Context) -> ParsedCommand? {
+        if let m = t.firstMatch("^(?:search|go)\\s+(?:on|in|to|into)\\s+the\\s+(?:url|address bar|url bar|link bar|address)(?:\\s+for)?\\s+(.+)$") {
+            if let url = Websites.url(for: m[1]) { return ParsedCommand(.openURL(url.absoluteString)) }
+            return ParsedCommand(.webSearch(m[1]))
+        }
+        guard let m = t.firstMatch("^search\\s+(.+)$") else { return nil }
+        let rest = m[1]
+        if let d = stripLeadingFillers(raw).firstMatch("^search\\s+([a-z0-9-]+(?:\\.[a-z0-9-]+)*\\.[a-z]{2,}(?:/\\S*)?)[.!?]*$"),
+           Websites.domainURL(d[1]) != nil {
+            return ParsedCommand(.openURL(d[1]))
+        }
+        if rest.firstMatch("^(?:for|on|in|the web|google|youtube|about)\\b") != nil { return nil }
+        // Only when the rest is itself clearly a command: it starts with a command word ("search python tutorial" stays a search).
+        let words = rest.split(separator: " ").map(String.init)
+        guard words.count >= 2, let first = words.first, CommandShape.verbs.contains(first) || ["tab", "the"].contains(first) else { return nil }
+        let inner = control(rest, context: context) ?? parseSingle(rest, rest, context: context)
+        guard let parsed = inner, let action = parsed.actions.first else { return nil }
+        if case .webSearch = action { return nil }
+        return parsed
     }
 
     /// "switch to Chrome and then go to the first tab" → both halves, when every part parses.
@@ -124,9 +207,11 @@ public enum FastPathParser {
 
     static func parseSingle(_ text: String, _ t: String, context: Context) -> ParsedCommand? {
         if let c = textQueryCommand(t) { return c }
+        if let c = resultCommand(t) { return c }
         if let c = appQualifiedTab(t) { return c }
         if let c = noteCommand(text, t) { return c }
         if let c = typeCommand(text, t) { return c }
+        if let c = sendCommand(t) { return c }
         if let c = messaging(text, t) { return c }
         if let c = screenCommand(t) { return c }
         if let c = numbersClick(t, context: context) { return c }
@@ -149,27 +234,36 @@ public enum FastPathParser {
 
     static func control(_ t: String, context: Context) -> ParsedCommand? {
         switch t {
-        case "wait", "pause", "hold on", "wait a moment", "wait a minute", "go to sleep", "sleep", "pause listening", "stand by", "standby", "hold", "mute yourself", "be quiet", "quiet":
+        case "wait", "pause", "hold on", "wait a moment", "wait a minute", "go to sleep", "sleep", "pause listening", "stand by", "standby", "hold", "mute yourself", "be quiet", "quiet",
+             "espera", "espera aí", "espera ai", "aguarda", "pausa", "dorme", "silêncio", "silencio":
             return ParsedCommand(.wait, label: "Waiting for “Hey Sirena”")
-        case "stop listening", "turn off", "shut down", "go away", "goodbye", "bye", "turn yourself off", "switch off", "off", "stop listening to me", "quit listening":
+        case "stop listening", "turn off", "shut down", "go away", "goodbye", "bye", "turn yourself off", "switch off", "off", "stop listening to me", "quit listening",
+             "desliga", "desligar", "desliga te", "deixa de ouvir", "para de ouvir":
             return ParsedCommand(.turnOff, label: "Off")
-        case "start dictating", "start dictation", "dictation mode", "take dictation", "begin dictation", "begin dictating", "dictate", "start typing", "dictation", "let me dictate", "start dictation mode", "enter dictation mode":
+        case "start dictating", "start dictation", "dictation mode", "take dictation", "begin dictation", "begin dictating", "dictate", "start typing", "dictation", "let me dictate", "start dictation mode", "enter dictation mode",
+             "ditar", "ditado", "modo ditado", "começa a ditar", "comeca a ditar", "vou ditar":
             return ParsedCommand(.startDictation, label: "Dictating — say “Sirena, stop” to finish")
-        case "stop dictating", "stop dictation", "end dictation", "done dictating", "stop typing", "exit dictation", "finish dictation", "end dictating", "dictation off", "leave dictation mode", "exit dictation mode":
+        case "stop dictating", "stop dictation", "end dictation", "done dictating", "stop typing", "exit dictation", "finish dictation", "end dictating", "dictation off", "leave dictation mode", "exit dictation mode",
+             "para de ditar", "parar ditado", "acaba o ditado", "fim do ditado":
             return ParsedCommand(.stopDictation, label: "Dictation off")
-        case "stop", "stop it", "that's enough", "done", "i'm done", "finished", "that's it", "enough":
+        case "stop", "stop it", "that's enough", "done", "i'm done", "finished", "that's it", "enough",
+             "para", "parar", "pára", "chega", "já está", "ja esta", "acabou", "para para":
             return context.isDictating ? ParsedCommand(.stopDictation, label: "Dictation off") : ParsedCommand(.cancel, label: "Stopped")
-        case "show numbers", "show the numbers", "numbers", "number mode", "numbers mode", "show labels", "label everything", "show me numbers", "number everything", "show me the numbers", "display numbers", "show number":
+        case "show numbers", "show the numbers", "numbers", "number mode", "numbers mode", "show labels", "label everything", "show me numbers", "number everything", "show me the numbers", "display numbers", "show number",
+             "mostra os números", "mostra os numeros", "mostra números", "números", "numeros":
             return ParsedCommand(.showNumbers, label: "Say “click <number>”")
-        case "hide numbers", "hide the numbers", "clear numbers", "remove numbers", "numbers off", "hide labels", "clear the numbers", "remove the numbers", "hide number":
+        case "hide numbers", "hide the numbers", "clear numbers", "remove numbers", "numbers off", "hide labels", "clear the numbers", "remove the numbers", "hide number",
+             "esconde os números", "esconde os numeros", "tira os números", "tira os numeros":
             return ParsedCommand(.hideNumbers, label: "Numbers hidden")
-        case "undo", "undo that", "undo the last action", "undo last action", "take that back", "revert", "undo it":
+        case "undo", "undo that", "undo the last action", "undo last action", "take that back", "revert", "undo it", "desfaz", "desfazer", "anula", "anula isso":
             return ParsedCommand(.undo, label: "Undo")
-        case "cancel", "never mind", "nevermind", "cancel that", "no", "abort", "leave it", "ignore that":
+        case "cancel", "never mind", "nevermind", "cancel that", "no", "abort", "leave it", "ignore that", "cancela", "cancelar", "esquece", "deixa", "deixa estar", "não", "nao":
             return ParsedCommand(.cancel, label: "Cancelled")
-        case "new line", "newline", "next line", "line break", "insert a new line", "go to the next line", "new paragraph", "paragraph", "insert new line":
+        case "new line", "newline", "next line", "line break", "insert a new line", "go to the next line", "new paragraph", "paragraph", "insert new line",
+             "nova linha", "linha nova", "parágrafo", "paragrafo", "novo parágrafo", "novo paragrafo":
             return ParsedCommand(.newLine, label: "New line")
-        case "delete that", "scratch that", "delete the last thing", "remove that", "erase that", "delete the last sentence", "undo dictation", "delete last", "scratch", "delete what i said", "erase":
+        case "delete that", "scratch that", "delete the last thing", "remove that", "erase that", "delete the last sentence", "undo dictation", "delete last", "scratch", "delete what i said", "erase",
+             "apaga isso", "apaga isto", "apaga a última", "apaga a ultima", "apaga":
             return ParsedCommand(.deleteLastChunk, label: "Deleting that")
         case "read this", "read that", "read it", "read the selection", "read selection", "read the selected text", "read this to me", "read that to me",
              "read it to me", "read what i selected", "read the highlighted text", "read this out loud", "read it out loud", "read aloud", "read this aloud":
@@ -183,7 +277,7 @@ public enum FastPathParser {
         case "stop reading", "stop reading please":
             return ParsedCommand(.readingControl(.stop), label: "Stopped reading")
         case "pause reading": return ParsedCommand(.readingControl(.pause), label: "Paused")
-        case "resume reading", "continue reading", "keep reading": return ParsedCommand(.readingControl(.resume), label: "Resuming")
+        case "resume reading", "continue reading", "keep reading", "continua a ler", "continua": return ParsedCommand(.readingControl(.resume), label: "Resuming")
         case "read faster", "speak faster", "talk faster": return ParsedCommand(.readingControl(.faster), label: "Faster")
         case "read slower", "speak slower", "talk slower": return ParsedCommand(.readingControl(.slower), label: "Slower")
         case "forget that", "forget that shortcut", "forget this shortcut", "forget the last shortcut", "unlearn that", "forget it":
@@ -194,6 +288,9 @@ public enum FastPathParser {
             return ParsedCommand(.openShortcutsWindow, label: "Shortcut book")
         case "show history", "show the history", "open history", "command history", "show command history", "show my history":
             return ParsedCommand(.openHistoryWindow, label: "Command history")
+        case "again", "more", "once more", "one more", "one more time", "do it again", "do that again", "repeat", "repeat that", "same again",
+             "same thing", "and again", "mais", "outra vez", "de novo", "mais uma vez", "repete":
+            return ParsedCommand(.repeatLast, label: "Again")
         case "help", "what can you do", "what can i say", "show help", "commands":
             return ParsedCommand(.say("Try: switch to Chrome · next tab · scroll down · click Send · type hello · start dictating · show numbers · wait"), label: "Help")
         default:
@@ -219,8 +316,13 @@ public enum FastPathParser {
         return ParsedCommand(.typeText(body), label: "Typing “\(body.prefix(40))\(body.count > 40 ? "…" : "")”")
     }
 
-    static func stripLeadIns(_ raw: String) -> String {
-        raw.replacingOccurrences(of: "^[\\s,]*(?:please|can you|could you|would you|will you|i want you to|let's|lets|go ahead and|now|just)\\s+", with: "", options: [.regularExpression, .caseInsensitive])
+    static func stripLeadIns(_ raw: String) -> String { stripLeadingFillers(raw) }
+
+    /// "send", "send it", "send the message", "enviar": send what is in the message box, after a confirmation.
+    static func sendCommand(_ t: String) -> ParsedCommand? {
+        guard t.firstMatch("^(?:send|send it|send this|send that|send the message|send message|send my message|send the text|send now|send it now|hit send|press send|"
+                           + "enviar|envia|envia isso|envia a mensagem|enviar mensagem|manda|manda isso|manda a mensagem)$") != nil else { return nil }
+        return ParsedCommand([.focusComposer, .confirmThen(message: "", actions: [.pressReturnToSend])], label: "Sending the message")
     }
 
     static func messaging(_ raw: String, _ t: String) -> ParsedCommand? {
@@ -270,9 +372,21 @@ public enum FastPathParser {
 
     /// "close (all) (the) tabs to the right", "close the other tabs", "close all tabs but the first one".
     static func closeTabs(_ t: String) -> ParsedCommand? {
-        guard t.hasPrefix("close") || t.hasPrefix("keep only") || t.hasPrefix("get rid of") else { return nil }
+        guard t.hasPrefix("close") || t.hasPrefix("keep only") || t.hasPrefix("get rid of") || t.hasPrefix("fecha") else { return nil }
         let tabs = "(?:all\\s+)?(?:of\\s+)?(?:the\\s+)?(?:tabs?|taps?|everything|all)"
         let here = "(?:\\s+(?:of|from)\\s+(?:this|the current|the active|the actual|my)?\\s*(?:one|tab|tap|page)?)?"
+        // "close all tabs", "close all the tabs", "close every tab", "close the tabs": every tab, one empty tab stays.
+        if t.firstMatch("^(?:close|get rid of)\\s+(?:all\\s+(?:of\\s+)?(?:the\\s+|my\\s+)?(?:tabs?|taps?)|every\\s+(?:tab|tap)|the\\s+(?:tabs|taps)|all\\s+(?:the\\s+)?open\\s+tabs|all\\s+of\\s+them)(?:\\s+(?:in\\s+this\\s+window|here|of\\s+this\\s+window|in\\s+the\\s+window))?$") != nil
+            || ["fecha todos os separadores", "fecha as abas todas", "fecha todas as abas", "fecha os separadores todos", "fechar todos os separadores"].contains(t) {
+            return ParsedCommand(.closeTabs(.all))
+        }
+        // "close all tabs to the right from/of the first tab": everything after tab 1.
+        if t.firstMatch("^(?:close|get rid of)\\s+\(tabs)\\s+(?:to|on|at)\\s+the\\s+right\\s+(?:of|from)\\s+the\\s+first(?:\\s+(?:one|tab|tap))?$") != nil {
+            return ParsedCommand(.closeTabs(.allExcept(.first)))
+        }
+        if t.firstMatch("^(?:close|get rid of)\\s+\(tabs)\\s+(?:to|on|at)\\s+the\\s+left\\s+(?:of|from)\\s+the\\s+last(?:\\s+(?:one|tab|tap))?$") != nil {
+            return ParsedCommand(.closeTabs(.allExcept(.last)))
+        }
         if t.firstMatch("^(?:close|get rid of)\\s+\(tabs)\\s+(?:to|on|at)\\s+the\\s+right\(here)$") != nil || t == "close tabs right" {
             return ParsedCommand(.closeTabs(.right))
         }
@@ -280,11 +394,11 @@ public enum FastPathParser {
             return ParsedCommand(.closeTabs(.left))
         }
         if t.firstMatch("^(?:close|get rid of)\\s+(?:all\\s+)?(?:of\\s+)?(?:the\\s+)?other\\s+(?:tabs?|taps?)$") != nil
-            || t.firstMatch("^(?:close|get rid of)\\s+\(tabs)\\s+(?:but|except|apart from|other than)\\s+(?:this|the current|the active|the actual|this current)(?:\\s+(?:one|tab|tap|page))?$") != nil
+            || t.firstMatch("^(?:close|get rid of)\\s+\(tabs)\\s+(?:but|except|except for|apart from|other than|unless|besides|but not|save)\\s+(?:this|the current|the active|the actual|this current)(?:\\s+(?:one|tab|tap|page))?$") != nil
             || ["keep only this tab", "keep only this one", "keep only the current tab"].contains(t) {
             return ParsedCommand(.closeTabs(.others))
         }
-        if let m = t.firstMatch("^(?:close|get rid of)\\s+\(tabs)\\s+(?:but|except|apart from|other than)\\s+(?:the\\s+)?(?:tab\\s+)?(?:number\\s+)?(\\S+)(?:\\s+(?:one|tab|tap))?$") {
+        if let m = t.firstMatch("^(?:close|get rid of)\\s+\(tabs)\\s+(?:but|except|except for|apart from|other than|unless|besides|but not|save)\\s+(?:the\\s+)?(?:tab\\s+)?(?:number\\s+)?(\\S+)(?:\\s+(?:one|tab|tap))?$") {
             let w = m[1]
             if w == "last" { return ParsedCommand(.closeTabs(.allExcept(.last))) }
             if w == "first" { return ParsedCommand(.closeTabs(.allExcept(.first))) }
@@ -377,6 +491,30 @@ public enum FastPathParser {
             if target.firstMatch("\\b(field|box|input|area|bar|button|link|menu|checkbox|icon)$") != nil { continue }
             if p.hasPrefix("^(.+?)") { target += " app" }   // "Google app" keeps the word for the open rule
             return ParsedCommand(isOpen ? .open(target) : .switchTo(target))
+        }
+        return nil
+    }
+
+    // MARK: Links and results on a page
+
+    static let resultOrdinals = "first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|last|1st|2nd|3rd|4th|5th|6th|7th|8th|9th|10th|"
+        + "primeiro|segundo|terceiro|quarto|quinto|primeira|segunda|terceira|quarta|quinta|último|ultimo|última|ultima"
+    static let resultOrdinalValues: [String: Int] = ["primeiro": 1, "primeira": 1, "segundo": 2, "segunda": 2, "terceiro": 3, "terceira": 3,
+                                                     "quarto": 4, "quarta": 4, "quinto": 5, "quinta": 5, "último": -1, "ultimo": -1, "última": -1, "ultima": -1]
+
+    /// "open the first link", "first result", "enter first link", "the second one", "click the third video", "result number 2".
+    static func resultCommand(_ t: String) -> ParsedCommand? {
+        let verb = "(?:(?:open|click|click on|enter|go to|go into|select|choose|tap|tap on|visit|follow|press|abre|abrir|clica|clicar|clica em|entra|entra em|entrar)\\s+)?"
+        let article = "(?:(?:the|o|a|no|na)\\s+)?"
+        let noun = "(?:link|links|result|search result|video|article|one|hit|story|post|resultado|vídeo|artigo|ligação)"
+        let suffix = "(?:\\s+(?:on the page|on this page|in the list|on the list|in the results|here|below|da lista|da página))?"
+        if let m = t.firstMatch("^" + verb + article + "(" + resultOrdinals + ")\\s+" + noun + suffix + "$") {
+            let w = m[1]
+            guard let n = resultOrdinalValues[w] ?? ordinal(w) else { return nil }
+            return ParsedCommand(.openResult(n))
+        }
+        if let m = t.firstMatch("^" + verb + article + "(?:link|result|search result|resultado)\\s+(?:number\\s+|número\\s+)?(\\S+)$"), let n = Numbers.parse(m[1]) {
+            return ParsedCommand(.openResult(n))
         }
         return nil
     }

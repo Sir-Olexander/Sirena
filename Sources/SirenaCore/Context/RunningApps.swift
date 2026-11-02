@@ -13,7 +13,8 @@ public enum RunningApps {
     /// Spoken names → app name fragments.
     static let aliases: [String: String] = [
         "chrome": "Google Chrome", "google chrome": "Google Chrome",
-        "vs code": "Code", "vscode": "Code", "visual studio code": "Code", "code": "Code",
+        "vs code": "Code", "vscode": "Code", "visual studio code": "Code", "code": "Code", "visual studio": "Code", "the visual studio": "Code",
+        "visual code": "Code", "vs": "Code",
         "settings": "System Settings", "system preferences": "System Settings", "preferences": "System Settings", "system settings": "System Settings",
         "messages": "Messages", "imessage": "Messages", "texts": "Messages",
         "mail": "Mail", "email": "Mail", "e mail": "Mail",
@@ -123,6 +124,12 @@ public enum RunningApps {
             if let b = Fuzzy.best(c, in: apps, name: \.0, threshold: 0.8) { return b.item.1 }
         }
         return nil
+    }
+
+    /// The running instance of an installed app (so "switch to Visual Studio" activates Code instead of "opening" it).
+    public static func running(at url: URL, in apps: [AppInfo]) -> AppInfo? {
+        let target = url.standardizedFileURL.resolvingSymlinksInPath()
+        return apps.first { $0.app.bundleURL?.standardizedFileURL.resolvingSymlinksInPath() == target }
     }
 
     /// Brings an app to the front. Returns true when the app is frontmost afterwards.

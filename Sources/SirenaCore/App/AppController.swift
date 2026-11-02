@@ -330,6 +330,7 @@ public final class AppController {
 
     func applySettings() {
         if settings.devMode { devPanel.show() } else { devPanel.hide() }
+        listening.applyOwnAudioSetting()
         overlayModel.showLatency = settings.showLatency
         overlayModel.large = settings.largeOverlay
         numbers.large = settings.largeOverlay
