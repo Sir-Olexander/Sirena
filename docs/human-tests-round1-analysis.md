@@ -65,8 +65,10 @@ kinogo dot org" now types "kinogo.org" (the recognizer wrote ".org" as "dot org"
 altogether in "type Kinogo", which the vocabulary hint helps with).
 
 **"Sometimes she says she typed when she didn't."** True: "Typed" was reported right after sending ⌘V, without
-checking anything had the keyboard focus. Now she checks the focused field before pasting and reads it back
-afterwards: "Typed" only when the text landed, otherwise "No text field is focused" / "Couldn't type into …".
+checking anything had the keyboard focus. Now she checks what has the focus before pasting: with no text field
+focused she says "No text field is focused in <app> — click into a field first" and pastes nothing (so the clipboard
+is left alone too). Reading the field back afterwards is not done: editors such as VS Code keep their text out of
+the accessibility value, so a read-back would report false failures there.
 
 **"She still listens to the sound of the PC when music is playing."** See 20.x. What I can say for sure: the lyrics
 reached the recognizer, so the gate was open or not running; and the on-device wake word bypassed the gate (fixed).
