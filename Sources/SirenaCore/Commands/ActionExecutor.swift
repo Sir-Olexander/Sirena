@@ -244,6 +244,7 @@ public final class ActionExecutor {
             return "Noted ✓"
         case .insertSnippet(let name):
             guard let sn = NotesStore.shared.snippet(named: name) else { throw ExecutionError.unresolved(name) }
+            try ensureTextFocus(snapshot: snap)
             inserter.insert(sn.text)
             undoStack.append(.textInserted)
             NotesStore.shared.noteSnippetUsed(sn.id)
@@ -295,6 +296,7 @@ public final class ActionExecutor {
         case .focusComposer:
             return focusComposer(snapshot: &snap)
         case .typeText(let text):
+            try ensureTextFocus(snapshot: snap)
             inserter.insert(text)
             undoStack.append(.textInserted)
             usleep(120_000)
@@ -304,6 +306,10 @@ public final class ActionExecutor {
             return "Sent"
         case .mediaKey(let k):
             Keyboard.mediaKey(k); return k
+        case .setVolume(let level, let muted):
+            return try ActionExecutor.setVolume(level: level, muted: muted)
+        case .scrollElement(let target, let dir, let amount):
+            return try scrollElement(target, dir, amount, snapshot: &snap)
         case .zoomWindow:
             if let f = snap.frontApp, let w = AX.frontWindow(pid: f.pid), let b = w.element(kAXZoomButtonAttribute), b.perform(kAXPressAction) { return "Zoomed" }
             Keyboard.press(KeyCombo("f", [.control, .command])); return "Full screen"
@@ -318,12 +324,43 @@ public final class ActionExecutor {
             throw ExecutionError.needsScreen(goal)
         case .wait, .turnOff, .startDictation, .stopDictation, .showNumbers, .hideNumbers, .undo, .cancel, .newLine, .deleteLastChunk,
              .readSelection, .readArticle, .readPage, .readingControl, .forgetLearnedShortcut,
-             .openNotesWindow, .openShortcutsWindow, .openHistoryWindow, .readText, .repeatLast:
+             .openNotesWindow, .openShortcutsWindow, .openHistoryWindow, .readText, .repeatLast, .addVocabulary:
             return ""   // control actions are handled by the listening controller
         }
     }
 
     // MARK: - Helpers
+
+    /// Typing goes through ⌘V: without a focused text field it lands nowhere, yet "Typed" was reported. Refuse with a
+    /// clear reason instead. Web and Electron apps sometimes report only the web area or a generic focused node, so
+    /// any focused element is accepted there.
+    func ensureTextFocus(snapshot snap: ScreenSnapshot) throws {
+        if dryRun { return }
+        if AX.focusedTextElement() != nil { return }
+        guard let front = snap.frontApp else { throw ExecutionError.failed("No text field is focused — click into one first") }
+        let webish = BrowserControl.isBrowser(front.bundleId) || ScreenContext.isElectronLike(front)
+        if webish, AXElement.application(pid: front.pid).focusedElement != nil { return }
+        if let f = AXElement.application(pid: front.pid).focusedElement {
+            let role = f.role ?? "element"
+            throw ExecutionError.failed("No text field is focused in \(front.name) (the \(role.replacingOccurrences(of: "AX", with: "").lowercased()) “\(f.label.prefix(30))” has the focus) — click into a field first")
+        }
+        throw ExecutionError.failed("No text field is focused in \(front.name) — click into one first")
+    }
+
+    /// Output volume through AppleScript: a level (0–100) and/or muted.
+    static func setVolume(level: Int?, muted: Bool?) throws -> String {
+        var parts: [String] = []
+        if let level {
+            let l = max(0, min(100, level))
+            BrowserControl.run("set volume output volume \(l)")
+            parts.append("Volume \(l)%")
+        }
+        if let muted {
+            BrowserControl.run("set volume output muted \(muted ? "true" : "false")")
+            if level == nil { parts.append(muted ? "Muted" : "Unmuted") }
+        }
+        return parts.joined(separator: ", ")
+    }
 
     static func normalizeURL(_ raw: String) -> String {
         var s = raw.lowercased().trimmingCharacters(in: .whitespaces)
@@ -351,14 +388,21 @@ public final class ActionExecutor {
         var target = raw.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
         var wantsApp = false
         if let m = WakeWord.normalize(target).firstMatch("^(.+?)\\s+(?:app|application)$") { target = m[1]; wantsApp = true }
-        if let app = RunningApps.exactMatch(target, in: snap.apps) { return activate(app, snapshot: &snap) }
-        if let url = RunningApps.installedAppURL(exactly: target) {
+        let site = wantsApp ? nil : Websites.url(for: target)
+        // A known site with a browser in front opens there (test 6.2: "open Gmail" with Safari in front), and a
+        // Chrome web-app shortcut named like the site ("Gmail.app" in Chrome Apps) is the site, not an app, unless
+        // the user says "app".
+        if let site, let front = snap.frontApp, BrowserControl.isBrowser(front.bundleId) { return openWebsite(site, snapshot: &snap) }
+        if let app = RunningApps.exactMatch(target, in: snap.apps), !(site != nil && RunningApps.isWebAppShortcut(app.app.bundleURL, bundleId: app.bundleId)) {
+            return activate(app, snapshot: &snap)
+        }
+        if let url = RunningApps.installedAppURL(exactly: target), !(site != nil && RunningApps.isWebAppShortcut(url, bundleId: Bundle(url: url)?.bundleIdentifier)) {
             if let app = RunningApps.running(at: url, in: snap.apps) { return activate(app, snapshot: &snap) }
             RunningApps.launch(url: url)
             return "Opening \(url.deletingPathExtension().lastPathComponent)"
         }
         if wantsApp { return try switchTo(target, snapshot: &snap) }
-        if let url = Websites.url(for: target) { return openWebsite(url, snapshot: &snap) }
+        if let site { return openWebsite(site, snapshot: &snap) }
         return try switchTo(target, snapshot: &snap)
     }
 
@@ -741,14 +785,124 @@ public final class ActionExecutor {
                 return "Opened menu “\(item.title ?? label)”"
             }
         }
+        // Not among the first elements of the snapshot (a cookie dialog deep in a long page) or in another window of
+        // the app (WhatsApp's call popup in front of its main window): a targeted search before giving up.
+        if let app = snap.frontApp, let (el, raised) = deepFind(label: label, app: app, preferInputs: false) {
+            AX.click(el)
+            undoStack.append(.generic)
+            return "Clicked “\(el.name.prefix(30))”" + (raised.map { " in “\($0.prefix(30))”" } ?? "")
+        }
         throw ExecutionError.elementNotFound(label)
     }
 
     private func focus(label: String, snapshot snap: inout ScreenSnapshot) throws -> String {
         let els = elements(for: &snap)
-        guard let el = AX.find(label: label, in: els, preferInputs: true) else { throw ExecutionError.elementNotFound(label) }
-        AX.focus(el)
-        return "Focused “\(el.name.prefix(30))”"
+        if let el = AX.find(label: label, in: els, preferInputs: true) {
+            AX.focus(el)
+            return "Focused “\(el.name.prefix(30))”"
+        }
+        if let app = snap.frontApp, let (el, raised) = deepFind(label: label, app: app, preferInputs: true) {
+            AX.focus(el)
+            return "Focused “\(el.name.prefix(30))”" + (raised.map { " in “\($0.prefix(30))”" } ?? "")
+        }
+        throw ExecutionError.elementNotFound(label)
+    }
+
+    /// Searches the whole front window for a label, then the app's other windows (raising the one that has it).
+    /// Returns the element and the title of the window raised, if another one was.
+    private func deepFind(label: String, app: AppInfo, preferInputs: Bool) -> (UIElementInfo, String?)? {
+        let ax = AXElement.application(pid: app.pid)
+        let front = AX.frontWindow(pid: app.pid)
+        if let w = front, let el = AX.findElement(label: label, in: w, preferInputs: preferInputs) { return (el, nil) }
+        for w in ax.windows.prefix(6) where front == nil || w != front! {
+            guard (w.subrole ?? "AXStandardWindow") == "AXStandardWindow", w.bool(kAXMinimizedAttribute) != true else { continue }
+            if let el = AX.findElement(label: label, in: w, preferInputs: preferInputs) {
+                w.set(kAXMainAttribute, kCFBooleanTrue)
+                w.perform(kAXRaiseAction)
+                usleep(150_000)
+                return (el, w.title ?? "another window")
+            }
+        }
+        return nil
+    }
+
+    /// "scroll down in the sidebar": a wheel event inside the named part of the window (whatever scroll view holds
+    /// that point scrolls, exactly like the mouse there). "here" = under the pointer.
+    private func scrollElement(_ target: String, _ dir: ScrollDirection, _ amount: ScrollAmount, snapshot snap: inout ScreenSnapshot) throws -> String {
+        let px: Int
+        switch amount {
+        case .small: px = 250
+        case .medium: px = 600
+        case .large: px = 1600
+        case .page: px = 800
+        }
+        var point: CGPoint
+        var where_: String
+        if target == "here" {
+            point = Mouse.location
+            where_ = "under the pointer"
+        } else {
+            guard let app = snap.frontApp, let win = AX.frontWindow(pid: app.pid) else { throw ExecutionError.failed("No window in front") }
+            guard let (frame, name) = ActionExecutor.scrollTarget(target, in: win, pid: app.pid) else { throw ExecutionError.elementNotFound(target) }
+            point = CGPoint(x: frame.midX, y: frame.midY)
+            where_ = "in “\(name.prefix(30))”"
+        }
+        switch dir {
+        case .down: Mouse.scroll(dy: px, at: point)
+        case .up: Mouse.scroll(dy: -px, at: point)
+        case .left: Mouse.scroll(dx: -px, dy: 0, at: point)
+        case .right: Mouse.scroll(dx: px, dy: 0, at: point)
+        }
+        return "Scrolled \(dir.rawValue) \(where_)"
+    }
+
+    /// The frame to scroll in for a spoken part of the window: landmarks (sidebar, navigation, main), the chat column
+    /// above the message box, a list or table, else any element whose label matches.
+    static func scrollTarget(_ spoken: String, in win: AXElement, pid: pid_t) -> (CGRect, String)? {
+        let t = WakeWord.normalize(spoken)
+        let wf = win.frame ?? .zero
+        func landmark(_ subroles: Set<String>) -> AXElement? {
+            TextExtractor.findFirst(in: win, maxVisited: 5000) { el in subroles.contains(el.subrole ?? "") && ((el.frame?.height ?? 0) > 80) }
+        }
+        /// The first element of one of `roles` whose frame passes `test`.
+        func pane(_ roles: Set<String>, _ test: (CGRect) -> Bool) -> (AXElement, CGRect)? {
+            guard let el = TextExtractor.findFirst(in: win, maxVisited: 5000, where: { el in
+                guard roles.contains(el.role ?? ""), let f = el.frame else { return false }
+                return test(f)
+            }), let f = el.frame else { return nil }
+            return (el, f)
+        }
+        if t.firstMatch("^(?:the\\s+)?(?:side ?bar|side panel|left (?:panel|pane|column|side|bar)|navigation|nav)$") != nil {
+            if let el = landmark(["AXLandmarkComplementary", "AXLandmarkNavigation"]), let f = el.frame { return (f, el.label.isEmpty ? "sidebar" : el.label) }
+            // Native apps: the leftmost scroll area narrower than half the window.
+            if let (_, f) = pane(["AXScrollArea", "AXOutline", "AXList", "AXTable"], { $0.width < wf.width * 0.5 && $0.height > wf.height * 0.3 && $0.minX < wf.minX + wf.width * 0.3 }) {
+                return (f, "sidebar")
+            }
+        }
+        if t.firstMatch("^(?:the\\s+)?(?:right (?:panel|pane|column|side|bar)|right side ?bar)$") != nil,
+           let (_, f) = pane(["AXScrollArea", "AXOutline", "AXList", "AXTable", "AXGroup"], { $0.width < wf.width * 0.5 && $0.height > wf.height * 0.3 && $0.maxX > wf.maxX - wf.width * 0.3 }) {
+            return (f, "right panel")
+        }
+        if t.firstMatch("^(?:the\\s+)?(?:main (?:area|pane|panel|content|part)|content|article|text|editor|document)$") != nil {
+            if let el = landmark(["AXLandmarkMain", "AXDocumentArticle"]), let f = el.frame { return (f, el.label.isEmpty ? "main area" : el.label) }
+            if let (el, f) = pane(["AXTextArea", "AXWebArea"], { $0.height > wf.height * 0.3 }) { return (f, el.label.isEmpty ? "main area" : el.label) }
+        }
+        if t.firstMatch("^(?:the\\s+)?(?:chat|conversation|messages|message list|thread|the chat)$") != nil {
+            // The column above the message box.
+            if let box = AX.focusedTextElement(), box.pid == pid, let bf = box.frame {
+                return (CGRect(x: bf.minX, y: wf.minY + 60, width: max(bf.width, 200), height: max(bf.minY - wf.minY - 80, 100)), "the chat")
+            }
+            if let (_, f) = pane(["AXList", "AXTable", "AXScrollArea", "AXGroup"], { $0.width > wf.width * 0.4 && $0.height > wf.height * 0.4 && $0.minX > wf.minX + wf.width * 0.2 }) {
+                return (f, "the chat")
+            }
+        }
+        if t.firstMatch("^(?:the\\s+)?(?:list|results|table|the results|the list|files|file list)$") != nil,
+           let (el, f) = pane(["AXList", "AXTable", "AXOutline"], { $0.height > wf.height * 0.2 }) {
+            return (f, el.label.isEmpty ? "the list" : el.label)
+        }
+        // Any element with that label (a group titled "Chats", a text field, a heading): scroll inside it.
+        if let el = AX.findElement(label: spoken, in: win, preferInputs: false, anyRole: true), el.frame.width > 20, el.frame.height > 20 { return (el.frame, el.name) }
+        return nil
     }
 
     /// Finds the message composer: a focused text input, a text input whose name hints at messaging, else the largest text area.

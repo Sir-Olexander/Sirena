@@ -204,6 +204,18 @@ public final class EchoGate {
     private func emit(_ d: (data: Data, open: Bool), into out: inout [Data]) {
         out.append(d.open ? d.data : Data(count: d.data.count))
         if d.open { passedChunks += 1 } else { gatedChunks += 1 }
+        lastChunkOpen = d.open
+    }
+
+    /// Whether the last chunk judged went through (false = replaced by silence).
+    public private(set) var lastChunkOpen = true
+
+    /// The gate is replacing the microphone with silence right now: what is heard is only the Mac's own sound. The
+    /// on-device wake-word detector gets the raw microphone and must skip these stretches too.
+    public var isSilencing: Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard isReferenceRecent(atSlot: EchoGate.slot(Self.now())), coupling != nil else { return false }
+        return !lastChunkOpen
     }
 
     /// Learns the room noise from the microphone while nothing plays.

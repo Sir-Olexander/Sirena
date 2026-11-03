@@ -68,7 +68,9 @@ public enum PageText {
 
     /// Readable blocks of the front window: web content (main article when the page marks one), else the
     /// main text view (paragraphs of its value), else static text.
-    public static func blocks(pid: pid_t, visibleOnly: Bool = false) -> [TextBlock] {
+    /// - Parameter fromBottom: walk the children last-first, so the bottom of the page is reached within the budget
+    ///   (chat apps: the newest messages).
+    public static func blocks(pid: pid_t, visibleOnly: Bool = false, fromBottom: Bool = false) -> [TextBlock] {
         guard let win = AX.frontWindow(pid: pid) else { return [] }
         AX.enableEnhancedAccessibility(pid: pid)
         if let web = TextExtractor.findFirst(in: win, maxVisited: 4000, where: { $0.role == "AXWebArea" }) {
@@ -76,12 +78,19 @@ public enum PageText {
                 let sub = el.subrole ?? ""
                 return sub == "AXDocumentArticle" || sub == "AXLandmarkMain" || el.role == "AXArticle"
             } ?? web)
-            return webBlocks(root: root, visibleIn: visibleOnly ? win.frame : nil)
+            return webBlocks(root: root, visibleIn: visibleOnly ? win.frame : nil, fromBottom: fromBottom)
         }
         if let area = mainTextArea(pid: pid, window: win), let value = area.valueString, !value.isEmpty {
             return textViewBlocks(area, value: value)
         }
-        return webBlocks(root: win, visibleIn: win.frame)
+        return webBlocks(root: win, visibleIn: win.frame, fromBottom: fromBottom)
+    }
+
+    /// The message box of a chat window when it is not focused: the lowest text input of some width.
+    static func composerElement(pid: pid_t, window: AXElement) -> AXElement? {
+        guard let wf = window.frame else { return nil }
+        let inputs = AX.collectInteractive(in: window, within: wf, maxCount: 300, maxVisited: 5000, timeBudget: 0.8).filter { $0.isTextInput }
+        return inputs.filter { $0.frame.width > 150 && $0.frame.midY > wf.midY }.max { $0.frame.maxY < $1.frame.maxY }?.element
     }
 
     /// The focused text view, else the largest text area of the window.
@@ -103,7 +112,7 @@ public enum PageText {
         return out
     }
 
-    static func webBlocks(root: AXElement, visibleIn bounds: CGRect?) -> [TextBlock] {
+    static func webBlocks(root: AXElement, visibleIn bounds: CGRect?, fromBottom: Bool = false) -> [TextBlock] {
         var blocks: [TextBlock] = []
         var visited = 0
         let deadline = Date().addingTimeInterval(1.5)
@@ -113,6 +122,21 @@ public enum PageText {
             let role = el.role ?? ""
             if TextExtractor.skippedRoles.contains(role) || TextExtractor.isBoilerplate(el) { return }
             if let b = bounds, let f = el.frame, f.width > 0, f.height > 0, !f.intersects(b) { return }
+            // Chat apps keep the newest messages at the bottom: when walking from the bottom, the message box and its
+            // pane come first and the conversation above it next; the chat list (hundreds of rows) is visited last.
+            if fromBottom, depth < 12 {
+                let kids = el.children
+                if kids.count > 1 {
+                    var idx = blockIndex
+                    if TextExtractor.blockRoles.contains(role) || role == "AXHeading" {
+                        blocks.append(TextBlock(text: "", isHeading: role == "AXHeading" || inHeading, words: 0, linkWords: 0, element: el, clickRun: nil,
+                                                range: nil, textElement: nil, frame: el.frame))
+                        idx = blocks.count - 1
+                    }
+                    for child in kids.reversed() { walk(child, blockIndex: idx, inLink: inLink || role == "AXLink", inHeading: inHeading || role == "AXHeading", depth: depth + 1) }
+                    return
+                }
+            }
             var idx = blockIndex
             if TextExtractor.blockRoles.contains(role) || role == "AXHeading" {
                 blocks.append(TextBlock(text: "", isHeading: role == "AXHeading" || inHeading, words: 0, linkWords: 0, element: el, clickRun: nil,
@@ -149,10 +173,20 @@ public enum PageText {
     public static func resolve(_ q: TextQuery, pid: pid_t) -> ResolvedText? {
         switch q {
         case .lastMessage(let n):
-            // Chat apps: the lowest visible text blocks of at least two words, excluding the input box.
+            // Chat apps: the lowest visible text blocks of at least two words in the conversation column (the one
+            // above the message box), never the box itself. Walked from the bottom, so the newest messages are seen
+            // before the budget runs out on the chat list.
             guard let win = AX.frontWindow(pid: pid), let wf = win.frame else { return nil }
-            let visible = blocks(pid: pid, visibleOnly: true).filter { b in
-                b.words >= 2 && !b.isHeading && (b.frame.map { $0.midY > wf.minY + wf.height * 0.15 } ?? true)
+            let composer = AX.focusedTextElement().flatMap { $0.pid == pid ? $0 : nil } ?? composerElement(pid: pid, window: win)
+            let box = composer?.frame
+            let column = box.map { CGRect(x: $0.minX - 40, y: wf.minY, width: $0.width + 80, height: max(0, $0.minY - wf.minY)) }
+            let visible = blocks(pid: pid, visibleOnly: true, fromBottom: true).filter { b in
+                guard b.words >= 2, !b.isHeading else { return false }
+                guard let f = b.frame else { return true }
+                if f.midY <= wf.minY + wf.height * 0.15 { return false }
+                if let box, f.intersects(box.insetBy(dx: 0, dy: -4)) { return false }
+                if let column { return f.midX >= column.minX && f.midX <= column.maxX && f.maxY <= column.maxY + 4 }
+                return true
             }
             let ordered = visible.sorted { ($0.frame?.maxY ?? 0) < ($1.frame?.maxY ?? 0) }
             guard ordered.count >= n else { return nil }

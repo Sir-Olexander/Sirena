@@ -112,8 +112,14 @@ public final class ListeningController {
             }
         }
         audio.onBuffer = { [weak self] buffer in
-            guard let self, self.localWakeActive else { return }
+            // The on-device detector gets the raw microphone: while the echo gate is silencing the Mac's own sound
+            // (music, a video), it must not hear it either, or a "hey" in the lyrics wakes her.
+            guard let self, self.localWakeActive, !self.echoGate.isSilencing else { return }
             self.localWake.append(buffer)
+        }
+        HistoryLog.echoStatusProvider = { [weak self] in
+            guard let self, self.systemAudio.isRunning else { return nil }
+            return self.echoStatus
         }
         localWake.onWake = { [weak self] in
             guard let self, self.state == .waiting else { return }
@@ -614,11 +620,39 @@ public final class ListeningController {
         }
     }
 
-    private func route(_ text: String, asrMs: Int?, spokeAt: Date = Date(), forceDictation: Bool = false) {
-        // Sirena hearing herself read: never act on it.
+    /// Words the recognizer keeps producing that go nowhere: a vocabulary hint, once per word.
+    private var repeatedWords = RepeatedWordTracker()
+
+    private func noteRepeatedWord(_ text: String) {
+        var known = Set(settings.customVocabulary.flatMap { WakeWord.normalize($0).split(separator: " ").map(String.init) })
+        for app in RunningApps.list() { known.formUnion(WakeWord.normalize(app.name).split(separator: " ").map(String.init)) }
+        guard let word = repeatedWords.note(text, knownWords: known) else { return }
+        Log.listening.notice("repeated unknown word “\(word, privacy: .public)”: suggesting the vocabulary")
+        history.append(HistoryEntry(utterance: word, route: "vocabulary hint", result: "heard \(repeatedWords.repeats) times"))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            self?.overlay.showHint("I keep hearing “\(word)” — say “Sirena, learn the word \(word)” to add it to my vocabulary", autoClear: 7)
+        }
+    }
+
+    private func route(_ raw: String, asrMs: Int?, spokeAt: Date = Date(), forceDictation: Bool = false) {
+        var text = raw
+        // Sirena hearing herself read: never act on it. What is left once her own words are taken out can still be a
+        // control ("stop" said over her voice) or a command with the name ("… Sirena, switch to Notes").
         if reader.recentlyActive, reader.isLikelyEcho(text) {
-            history.append(HistoryEntry(utterance: text, route: "ignored (own voice)", latency: LatencyReport(asrMs: asrMs)))
-            return
+            let rest = reader.leftover(of: text)
+            if reader.isActive, let control = UtteranceRouter.readingControl(FastPathParser.normalize(rest)) {
+                reader.control(control)
+                history.append(HistoryEntry(utterance: text, route: "control", layer: "fast", action: "reading \(control.rawValue) (heard over own voice)", result: "ok",
+                                            latency: LatencyReport(asrMs: asrMs), command: rest, actions: [.readingControl(control)]))
+                return
+            }
+            if let after = WakeWord.stripLeadingName(rest), !FastPathParser.normalize(after).isEmpty {
+                history.append(HistoryEntry(utterance: text, route: "own voice + command", result: rest, latency: LatencyReport(asrMs: asrMs)))
+                text = rest
+            } else {
+                history.append(HistoryEntry(utterance: text, route: "ignored (own voice)", latency: LatencyReport(asrMs: asrMs)))
+                return
+            }
         }
         let ctx = RouterContext(state: state, isDictating: isDictating, hasPendingConfirmation: pipeline.hasPendingConfirmation,
                                 inFollowUpWindow: inFollowUpWindow(spokeAt: spokeAt), numbersVisible: numbers.isVisible, pushToTalk: pushToTalkKey,
@@ -630,6 +664,10 @@ public final class ListeningController {
         default: pipeline.discardPrepared()   // a model call started at the end of speech is not needed
         }
         if state == .awake { resetIdleTimer() }
+        switch decision {
+        case .dictation, .dictationThenCommand, .confirm, .wake, .reading: break
+        default: if state == .awake { noteRepeatedWord(text) }
+        }
         switch decision {
         case .wake:
             if state == .waiting {
@@ -713,15 +751,29 @@ public final class ListeningController {
             dictation.reset()
             overlay.showWorking("Dictation off", autoClear: 2)
         case .showNumbers:
-            Task.detached(priority: .userInitiated) { [context, numbers, overlay] in
-                let snap = context.snapshot(includeElements: true, includeBrowser: false, maxElements: 150)
-                guard let front = snap.frontApp else { return }
-                numbers.show(elements: snap.elements, frontPid: front.pid)
+            // Said again within a few seconds (while reading the badges): keep them rather than rebuild them.
+            if numbers.isVisible, Date().timeIntervalSince(numbersShownAt) < 4 {
+                overlay.showWorking("Say “click <number>”", autoClear: 3)
+                return
+            }
+            numbersShownAt = Date()
+            Task.detached(priority: .userInitiated) { [numbers, overlay] in
+                let (elements, front) = ListeningController.numberedElements()
+                guard let front else { return }
+                numbers.show(elements: elements, frontPid: front.pid)
                 await MainActor.run {
                     overlay.setNumbersVisible(true)
-                    overlay.showWorking(snap.elements.isEmpty ? "Nothing clickable found" : "Say “click <number>”", autoClear: 4)
+                    overlay.showWorking(elements.isEmpty ? "Nothing clickable found" : "Say “click <number>”", autoClear: 4)
                 }
             }
+        case .addVocabulary(let word):
+            let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !settings.customVocabulary.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+                settings.customVocabulary.append(trimmed)
+            }
+            repeatedWords.forget(trimmed)
+            transcriber.refreshKeywords(force: true)
+            overlay.showWorking("Learned “\(trimmed)” — I'll listen for it", autoClear: 3)
         case .hideNumbers:
             numbers.hide()
             overlay.setNumbersVisible(false)
@@ -753,6 +805,47 @@ public final class ListeningController {
         default:
             break
         }
+    }
+
+    private var numbersShownAt = Date.distantPast
+
+    /// The elements to badge: the front window (the pane with the keyboard focus first, then the rest), and the
+    /// topmost window on every other screen, numbered continuously.
+    static func numberedElements() -> ([UIElementInfo], AppInfo?) {
+        guard let front = RunningApps.frontmost(), front.bundleId != Bundle.main.bundleIdentifier, AX.isTrusted else { return ([], nil) }
+        if front.bundleId.contains("google.Chrome") || front.bundleId.contains("electron") || ScreenContext.isElectronLike(front) {
+            AX.enableEnhancedAccessibility(pid: front.pid)
+        }
+        let app = AXElement.application(pid: front.pid)
+        var out: [UIElementInfo] = []
+        var frames: [CGRect] = []
+        func add(_ els: [UIElementInfo]) {
+            for e in els where !frames.contains(where: { $0.equalTo(e.frame) }) {
+                frames.append(e.frame)
+                var info = UIElementInfo(id: out.count + 1, element: e.element, role: e.role, subrole: e.subrole, name: e.name, frame: e.frame,
+                                         isFocused: e.isFocused, isEnabled: e.isEnabled)
+                info.state = e.state
+                out.append(info)
+            }
+        }
+        if let win = AX.frontWindow(pid: front.pid), let wf = win.frame {
+            // The pane holding the keyboard focus (an editor next to a preview) comes first, so its elements get the low numbers.
+            if var pane = app.focusedElement, pane != win {
+                var hops = 0
+                while let p = pane.parent, p != win, hops < 30, (pane.frame.map { $0.width * $0.height } ?? 0) < wf.width * wf.height * 0.2 { pane = p; hops += 1 }
+                if pane != win, let pf = pane.frame, pf.width * pf.height < wf.width * wf.height * 0.9 {
+                    add(AX.collectInteractive(in: pane, within: wf, maxCount: 250, maxVisited: 3000, timeBudget: 0.7))
+                }
+            }
+            add(AX.collectInteractive(in: win, within: wf, maxCount: 400, maxVisited: 5000, timeBudget: 1.2))
+        }
+        let frontScreen = Screens.frontWindowScreen()
+        for screen in Screens.ordered() where screen != frontScreen {
+            guard let top = Screens.topWindow(on: screen), let win = top.window, let wf = win.frame else { continue }
+            if top.app.bundleId.contains("google.Chrome") || ScreenContext.isElectronLike(top.app) { AX.enableEnhancedAccessibility(pid: top.app.pid) }
+            add(AX.collectInteractive(in: win, within: wf, maxCount: 150, maxVisited: 2500, timeBudget: 0.6))
+        }
+        return (out, front)
     }
 
     private func startReading(_ action: Action) {

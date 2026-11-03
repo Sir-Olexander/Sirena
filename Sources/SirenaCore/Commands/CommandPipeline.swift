@@ -234,6 +234,8 @@ public final class CommandPipeline {
                 let res = try await executor.execute(parsed.actions, snapshot: nil)
                 latency.actMs = Int(Date().timeIntervalSince(t1) * 1000)
                 await finish(res, label: parsed.label, latency: latency, command: text, layer: "fast", shortcutId: nil)
+                // "show numbers on the other screen": a control after direct actions runs once they are done.
+                if res.pendingConfirmation == nil, parsed.actions.count > 1, let last = parsed.actions.last, last.isControl { runControl(last, label: parsed.label) }
                 log(text, layer: "fast", actions: parsed.actions, result: res.pendingConfirmation == nil ? res.summary : "awaiting confirmation", latency: latency)
                 if res.pendingConfirmation == nil { noteRepeatable(parsed.actions, label: parsed.label) }
                 return
@@ -474,7 +476,7 @@ public final class CommandPipeline {
                     // Scrolls, key presses, typing and text edits leave no trace in a snapshot; another round would only invite a repeat.
                     let unverifiable = actions.allSatisfy { a in
                         switch a {
-                        case .scroll, .scrollTo, .pressKeys, .keySequence, .typeText, .mediaKey, .pause, .goBack, .goForward, .reload, .closeTab, .newTab, .reopenTab,
+                        case .scroll, .scrollTo, .scrollElement, .pressKeys, .keySequence, .typeText, .mediaKey, .setVolume, .pause, .goBack, .goForward, .reload, .closeTab, .newTab, .reopenTab,
                              .editText, .saveNote, .insertSnippet, .webSearch, .openURL, .moveWindowToScreen, .focusScreen: return true
                         default: return false
                         }
@@ -548,13 +550,37 @@ public final class CommandPipeline {
                                           "continue", "yes", "no", "ok", "okay", "the", "a", "an", "do", "go", "on", "to", "please", "now",
                                           "isto", "isso", "este", "esta", "esse", "essa", "aqui", "ali", "mais", "o", "a", "um", "uma"]
 
-    /// The screenshot fallback costs 10–30 s: only for a request that says what to do (three words or more,
-    /// not only "this one", "more", "resume").
+    /// The screenshot fallback costs 10–30 s: only for a request that names what to act on ("click consent",
+    /// "open the first conversation"), never for "this one", "click it", "more", "resume".
     static func screenFallbackAllowed(_ command: String) -> Bool {
         let words = FastPathParser.normalize(command).split(separator: " ").map(String.init)
-        guard words.count >= 3 else { return false }
-        return words.contains { !vagueWords.contains($0) }
+        guard words.count >= 2 else { return false }
+        return words.dropFirst().contains { !vagueWords.contains($0) }
     }
+
+    /// "switch to Zorbulator", "open Flurb": the fast path and the model found no app, tab, window or site with that
+    /// name. A screenshot cannot find it either, so the fallback is never tried for these; the name is returned.
+    static func unresolvableTarget(_ command: String) -> String? {
+        guard let parsed = FastPathParser.parse(command) else { return nil }
+        let real = parsed.actions.filter { if case .pause = $0 { return false }; return true }
+        guard real.count == 1, let a = real.first else { return nil }
+        let name: String
+        switch a {
+        case .switchTo(let n), .open(let n), .activateApp(let n), .launchApp(let n): name = n
+        case .inApp(let n, _): name = n
+        default: return nil
+        }
+        // "open the first conversation", "open settings": things on the screen, which a screenshot can find.
+        let words = WakeWord.normalize(name).split(separator: " ").map(String.init)
+        guard (1...3).contains(words.count), !words.contains(where: { screenObjectWords.contains($0) || Numbers.parse($0) != nil }) else { return nil }
+        return name
+    }
+
+    static let screenObjectWords: Set<String> = ["first", "second", "third", "fourth", "fifth", "last", "next", "previous", "conversation", "chat",
+                                                 "message", "messages", "item", "file", "folder", "settings", "preferences", "menu", "button", "tab",
+                                                 "window", "link", "result", "video", "email", "mail", "document", "note", "page", "section", "option",
+                                                 "panel", "list", "one", "this", "that", "inbox", "compose", "new", "latest", "recent", "top", "bottom",
+                                                 "conversa", "mensagem", "ficheiro", "pasta", "definições", "definicoes", "primeiro", "primeira", "último", "ultimo"]
 
     /// A request that asks to look rather than to act: a description is then the answer.
     static func asksToLook(_ command: String) -> Bool {
@@ -564,14 +590,21 @@ public final class CommandPipeline {
 
     private func runLayer3(goal: String, text: String, latency: inout LatencyReport) async {
         latency.layer = "screen"
+        if let name = CommandPipeline.unresolvableTarget(text) {
+            overlay.showMessage("I couldn't find “\(name)”: no app, tab, window or site with that name", autoClear: 5)
+            log(text, layer: "screen", actions: nil, result: "error: nothing called “\(name)” to switch to", latency: latency, failed: true)
+            return
+        }
         guard CommandPipeline.screenFallbackAllowed(text) else {
             overlay.showMessage("Say what to do there, for example “click Send” or “open the first conversation”", autoClear: 5)
             log(text, layer: "screen", actions: nil, result: "error: too vague for the screen fallback", latency: latency, failed: true)
             return
         }
+        // A question ("what's on my screen?") gets a look and an answer, never clicks.
+        let lookOnly = CommandPipeline.asksToLook(text)
         let t = Date()
         do {
-            let outcome = try await runComputerUse(goal: goal, command: text)
+            let outcome = try await runComputerUse(goal: goal, command: text, lookOnly: lookOnly)
             latency.actMs = Int(Date().timeIntervalSince(t) * 1000)
             overlay.setLatency(latency)
             if let reason = outcome.stopped {
@@ -605,14 +638,14 @@ public final class CommandPipeline {
         return (error as NSError).domain == "Swift.CancellationError"
     }
 
-    private func runComputerUse(goal: String, command: String) async throws -> ComputerUseAgent.Outcome {
+    private func runComputerUse(goal: String, command: String, lookOnly: Bool = false) async throws -> ComputerUseAgent.Outcome {
         isScreenAgentRunning = true
         defer { isScreenAgentRunning = false }
         overlay.showWorking("Looking at the screen…", autoClear: 60)
         SessionStats.shared.beginScreenRead(command: command)
         let snapshot = context.snapshot(includeElements: false)
         let ctx = "Front app: \(snapshot.frontAppName). Running apps: \(snapshot.apps.map(\.name).joined(separator: ", "))."
-        return try await computerUse.run(goal: goal, context: ctx)
+        return try await computerUse.run(goal: goal, context: ctx, lookOnly: lookOnly)
     }
 
     private func finish(_ res: ExecutionResult, label: String, latency: LatencyReport, command: String, layer: String, shortcutId: String?) async {

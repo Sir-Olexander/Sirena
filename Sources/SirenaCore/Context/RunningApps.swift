@@ -126,6 +126,14 @@ public enum RunningApps {
         return nil
     }
 
+    /// A Chrome web-app shortcut ("Gmail.app" under Chrome Apps, bundle id com.google.Chrome.app.…) or another
+    /// browser's installed web app: a website wearing an app icon.
+    public static func isWebAppShortcut(_ url: URL?, bundleId: String?) -> Bool {
+        if let b = bundleId, b.hasPrefix("com.google.Chrome.app.") || b.hasPrefix("com.brave.Browser.app.") || b.hasPrefix("com.microsoft.edgemac.app.") || b.hasPrefix("com.apple.Safari.WebApp.") { return true }
+        if let p = url?.path, p.contains("Chrome Apps.localized") || p.contains("/Edge Apps") || p.contains("/Brave Apps") { return true }
+        return false
+    }
+
     /// The running instance of an installed app (so "switch to Visual Studio" activates Code instead of "opening" it).
     public static func running(at url: URL, in apps: [AppInfo]) -> AppInfo? {
         let target = url.standardizedFileURL.resolvingSymlinksInPath()

@@ -1,5 +1,6 @@
 import Foundation
 import ApplicationServices
+import Carbon.HIToolbox
 import AppKit
 
 /// Thin Swift wrapper over AXUIElement.
@@ -258,6 +259,48 @@ public enum AX {
         return translated.max { $0.1 < $1.1 }?.0
     }
 
+    /// A targeted search of a whole window for one label (up to ~6000 nodes, 1.5 s), for elements the capped snapshot
+    /// never reached: a cookie dialog at the end of a long page, a search field in a busy chat app. Pressable
+    /// elements and text inputs first; with `anyRole`, headings, groups and static text count too.
+    public static func findElement(label query: String, in root: AXElement, preferInputs: Bool, anyRole: Bool = false, maxVisited: Int = 6000, timeBudget: TimeInterval = 1.5) -> UIElementInfo? {
+        let wanted = [query] + LabelSynonyms.alternatives(query)
+        var best: (UIElementInfo, Double)?
+        var queue: [(AXElement, Int)] = [(root, 0)]
+        var head = 0
+        var visited = 0
+        let deadline = Date().addingTimeInterval(timeBudget)
+        var nextId = 10_000
+        while head < queue.count, visited < maxVisited, Date() < deadline {
+            let (el, depth) = queue[head]; head += 1
+            visited += 1
+            let role = el.role ?? ""
+            if containerSkip.contains(role) { continue }
+            let interactive = interactiveRoles.contains(role)
+            let candidate = interactive || (anyRole && ["AXStaticText", "AXHeading", "AXGroup", "AXCell", "AXRow", "AXImage"].contains(role))
+                || (depth > 0 && ["AXGroup", "AXImage", "AXStaticText", "AXCell", "AXRow", "AXHeading"].contains(role) && el.actions.contains(kAXPressAction))
+            if candidate {
+                let name = el.label
+                if !name.isEmpty, let frame = el.frame, frame.width >= 2, frame.height >= 2 {
+                    var score = wanted.map { Fuzzy.score(query: $0, candidate: name) }.max() ?? 0
+                    if preferInputs, el.isTextInputRole { score += 0.1 }
+                    if !el.isEnabled { score -= 0.2 }
+                    if score >= 0.8, best == nil || score > best!.1 {
+                        var info = UIElementInfo(id: nextId, element: el, role: role, subrole: el.subrole, name: String(name.prefix(80)), frame: frame,
+                                                 isFocused: el.isFocused, isEnabled: el.isEnabled)
+                        info.state = state(of: el, role: role, isToggle: toggleRoles.contains(role))
+                        best = (info, score)
+                        nextId += 1
+                        if score >= 0.99 { break }
+                    }
+                }
+            }
+            if depth < 60, !(role == "AXButton" || role == "AXMenuItem") {
+                for child in el.children { queue.append((child, depth + 1)) }
+            }
+        }
+        return best?.0
+    }
+
     /// Clicks an element: AXPress first, then a synthetic click at its center.
     @discardableResult
     public static func click(_ info: UIElementInfo) -> Bool {
@@ -360,6 +403,15 @@ public enum Keyboard {
         return f
     }
 
+    static let modifierKeyCodes: [(Modifier, CGKeyCode, CGEventFlags)] = [
+        (.command, CGKeyCode(kVK_Command), .maskCommand), (.shift, CGKeyCode(kVK_Shift), .maskShift),
+        (.option, CGKeyCode(kVK_Option), .maskAlternate), (.control, CGKeyCode(kVK_Control), .maskControl),
+        (.function, CGKeyCode(kVK_Function), .maskSecondaryFn),
+    ]
+
+    /// Presses a shortcut the way fingers do: modifier keys down (as flags-changed events), the key, then the
+    /// modifiers up. The explicit release matters for ⌘⇥: the app switcher commits when ⌘ goes up, so without it the
+    /// switcher could stay on screen.
     @discardableResult
     public static func press(_ combo: KeyCombo) -> Bool {
         guard let code = KeyNames.code(for: combo.key) else { return false }
@@ -367,12 +419,22 @@ public enum Keyboard {
         let src = CGEventSource(stateID: .combinedSessionState)
         guard let down = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: true),
               let up = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: false) else { return false }
+        let mods = modifierKeyCodes.filter { combo.modifiers.contains($0.0) }
+        var held = CGEventFlags()
+        for (_, mcode, flag) in mods {
+            held.insert(flag)
+            if let e = CGEvent(keyboardEventSource: src, virtualKey: mcode, keyDown: true) { e.flags = held; e.post(tap: .cghidEventTap); usleep(8_000) }
+        }
         down.flags = flags
         up.flags = flags
         down.post(tap: .cghidEventTap)
         usleep(25_000)
         up.post(tap: .cghidEventTap)
         usleep(25_000)
+        for (_, mcode, flag) in mods.reversed() {
+            held.remove(flag)
+            if let e = CGEvent(keyboardEventSource: src, virtualKey: mcode, keyDown: false) { e.flags = held; e.post(tap: .cghidEventTap); usleep(8_000) }
+        }
         return true
     }
 
