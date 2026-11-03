@@ -40,7 +40,11 @@ public struct OverlayView: View {
                 }
             }
             if showsScreenMarker {
-                Capsule().fill(accent).frame(width: 26 * scale, height: 3).padding(.bottom, 2)
+                Capsule().fill(accent).frame(width: 26 * scale, height: 3)
+                    // Dark edge so the light mark stays visible on a light desktop.
+                    .overlay(Capsule().stroke(SirenaPalette.ink.opacity(0.7), lineWidth: 0.75))
+                    .shadow(color: .black.opacity(0.45), radius: 1.5)
+                    .padding(.bottom, 2)
                     .help("Sirena is acting on this screen")
             }
         }
