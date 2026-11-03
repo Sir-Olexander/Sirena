@@ -70,82 +70,82 @@ when she should.
 
 | ID | Say | Expected | Result |
 |---|---|---|---|
-| 3.1 | "switch to Notes" (no name, window closed) | Nothing runs; pill hints "Start with “Sirena” to give a command" | |
-| 3.2 | "Sirena, switch to Chrome", then within 8 s "next tab" | Both run; the second without the name | |
-| 3.3 | "Sirena, switch to Chrome", wait 12 s, "switch to Notes" | Second one does **not** run (outside follow-up, not a safe nav command) | |
+| 3.1 | "switch to Notes" (no name, window closed) | Nothing runs; pill hints "Start with “Sirena” to give a command" |P |
+| 3.2 | "Sirena, switch to Chrome", then within 8 s "next tab" | Both run; the second without the name |P |
+| 3.3 | "Sirena, switch to Chrome", wait 12 s, "switch to Notes" | Second one does **not** run (outside follow-up, not a safe nav command) |P |
 | 3.4 | "Sirena, scroll down", wait 15 s, "scroll down" | Runs (quiet stretch: safe navigation up to 20 s) | |
-| 3.5 | "Sirena, scroll down", wait 25 s, "scroll down" | Does not run | |
-| 3.6 | Start a long sentence 7 s after a command that ends at 10 s: "Sirena… no — next tab please" style, i.e. begin "next tab" just before the ring ends but finish after | Runs (window counted from when you start speaking) | |
-| 3.7 | "Serena, next tab" / "Siren a, next tab" | Runs (close misrecognitions accepted) | |
-| 3.8 | "wait Sirena" / "Para, para Sirena, para" | Treated as named control: she waits / stops | |
-| 3.9 | Inside the follow-up window: "okay", "uh", "hmm" | Nothing happens, no model call (dev panel unchanged) | |
-| 3.10 | Inside the window: "what time is it?" | Ignored (question, not a command) | |
-| 3.11 | Inside the window: "switch to" (cut off) | Ignored, no guessing | |
+| 3.5 | "Sirena, scroll down", wait 25 s, "scroll down" | Does not run |P |
+| 3.6 | Start a long sentence 7 s after a command that ends at 10 s: "Sirena… no — next tab please" style, i.e. begin "next tab" just before the ring ends but finish after | Runs (window counted from when you start speaking) | p|
+| 3.7 | "Serena, next tab" / "Siren a, next tab" | Runs (close misrecognitions accepted) | p|
+| 3.8 | "wait Sirena" / "Para, para Sirena, para" | Treated as named control: she waits / stops | P|
+| 3.9 | Inside the follow-up window: "okay", "uh", "hmm" | Nothing happens, no model call (dev panel unchanged) |P |
+| 3.10 | Inside the window: "what time is it?" | Ignored (question, not a command) | F|
+| 3.11 | Inside the window: "switch to" (cut off) | Ignored, no guessing |P |
 | 3.12 | Second person, mid-window, says "I think we should switch to Slack later" | Ignored (chatter) | |
 | 3.13 | Second person says "Sirena, next tab" | Runs: the rule is about the name, not the voice. Note this as expected behaviour | |
 | 3.14 | Say a sentence with Sirena in the middle: "I told Sirena to scroll down" | Does not run | |
-| 3.15 | "Sirena, next tab", then "again", then "more" | Tab advances three times | |
+| 3.15 | "Sirena, next tab", then "again", then "more" | Tab advances three times | P|
 
 ## 4. Apps and windows
 
 | ID | Say | Expected | Result |
 |---|---|---|---|
-| 4.1 | "Sirena, switch to Chrome" | Chrome in front, pill "Switched to Google Chrome" | |
-| 4.2 | "Sirena, open Calculator" (not running) | Calculator launches | |
-| 4.3 | "Sirena, switch to VS Code" / "switch to code" | VS Code in front | |
-| 4.4 | "Sirena, switch to the Google page" | The Chrome tab with Google results comes to front | |
-| 4.5 | "Sirena, switch to the Wikipedia tab" (by title words) | Right tab | |
-| 4.6 | "Sirena, command tab" / "alt tab" | Previous app in front | |
-| 4.7 | "Sirena, close this window" | Front window closes (asks first if it has unsaved work) | |
-| 4.8 | "Sirena, go full screen" / "enter full screen" | Front window goes full screen | |
-| 4.9 | "Sirena, switch to Zorbulator" (no such app) | Says it cannot find it; does not open something random | |
-| 4.10 | "Sirena, open Google Chrome" | Opens the **app**, not google.com | |
+| 4.1 | "Sirena, switch to Chrome" | Chrome in front, pill "Switched to Google Chrome" |P |
+| 4.2 | "Sirena, open Calculator" (not running) | Calculator launches | P|
+| 4.3 | "Sirena, switch to VS Code" / "switch to code" | VS Code in front | P|
+| 4.4 | "Sirena, switch to the Google page" | The Chrome tab with Google results comes to front | P|
+| 4.5 | "Sirena, switch to the Wikipedia tab" (by title words) | Right tab | P|
+| 4.6 | "Sirena, command tab" / "alt tab" | Previous app in front |P |
+| 4.7 | "Sirena, close this window" | Front window closes (asks first if it has unsaved work) | P|
+| 4.8 | "Sirena, go full screen" / "enter full screen" | Front window goes full screen | P|
+| 4.9 | "Sirena, switch to Zorbulator" (no such app) | Says it cannot find it; does not open something random | F|
+| 4.10 | "Sirena, open Google Chrome" | Opens the **app**, not google.com | P|
 
 ## 5. Tabs
 
 | ID | Say (front app in brackets) | Expected | Result |
 |---|---|---|---|
-| 5.1 | [Chrome] "Sirena, go to the first tab" | Tab 1 | |
-| 5.2 | "next tab" / "previous tab" / "tab 3" / "last tab" | Each correct | |
-| 5.3 | "Sirena, close tab", then "bring back the tab" | Closes, then reopens it | |
-| 5.4 | "Sirena, close the tabs to the right" | Only tabs right of the current one close | |
-| 5.5 | "Sirena, close the other tabs" | Only the current one remains | |
-| 5.6 | "Sirena, close all tabs" | Every tab of the visible window closes; one empty tab left; other windows untouched | |
-| 5.7 | "Sirena, create a new tab" | New tab | |
-| 5.8 | [VS Code] "Sirena, tab 2" | Second editor tab of VS Code (not Chrome) | |
+| 5.1 | [Chrome] "Sirena, go to the first tab" | Tab 1 | P|
+| 5.2 | "next tab" / "previous tab" / "tab 3" / "last tab" | Each correct |P |
+| 5.3 | "Sirena, close tab", then "bring back the tab" | Closes, then reopens it |P |
+| 5.4 | "Sirena, close the tabs to the right" | Only tabs right of the current one close | P|
+| 5.5 | "Sirena, close the other tabs" | Only the current one remains |P |
+| 5.6 | "Sirena, close all tabs" | Every tab of the visible window closes; one empty tab left; other windows untouched | P|
+| 5.7 | "Sirena, create a new tab" | New tab |P |
+| 5.8 | [VS Code] "Sirena, tab 2" | Second editor tab of VS Code (not Chrome) | P|
 | 5.9 | [Finder] "Sirena, next tab" | Finder's next tab | |
 | 5.10 | [Notes, no tabs] "Sirena, next tab" | Falls back to the browser; says which | |
 | 5.11 | [Notes] "Sirena, Chrome tab 2" | Chrome comes front on tab 2 | |
-| 5.12 | [Chrome] "Sirena, switch to the second tab in VS Code" | VS Code, tab 2 | |
-| 5.13 | "Sirena, close tap" (misheard "tab") | Still closes the tab | |
-| 5.14 | [Safari] repeat 5.1–5.3 | Same results in Safari | |
+| 5.12 | [Chrome] "Sirena, switch to the second tab in VS Code" | VS Code, tab 2 | P|
+| 5.13 | "Sirena, close tap" (misheard "tab") | Still closes the tab | P|
+| 5.14 | [Safari] repeat 5.1–5.3 | Same results in Safari | P|
 
 ## 6. Websites, search and results pages
 
 | ID | Say | Expected | Result |
 |---|---|---|---|
-| 6.1 | [Chrome front] "Sirena, open YouTube" | Goes to the existing YouTube tab, does not open a duplicate | |
-| 6.2 | [Safari front] "Sirena, open Gmail" | Opens in Safari (browser in front) | |
-| 6.3 | [Notes front] "Sirena, open Google" | Opens in the browser used last | |
-| 6.4 | "Sirena, search for weather in Lisbon" | Web search in the right browser | |
-| 6.5 | On a Google results page: "Sirena, first link" | Opens the first organic result, not an ad or "skip to content" | |
-| 6.6 | "the second one" (follow-up) / "open the third result" | Correct results | |
-| 6.7 | On YouTube search results: "Sirena, click the third video" | Third video opens | |
-| 6.8 | "Sirena, go back" | Browser back | |
-| 6.9 | "Sirena, focus the address bar" | Address bar selected | |
+| 6.1 | [Chrome front] "Sirena, open YouTube" | Goes to the existing YouTube tab, does not open a duplicate |P |
+| 6.2 | [Safari front] "Sirena, open Gmail" | Opens in Safari (browser in front) |F |
+| 6.3 | [Notes front] "Sirena, open Google" | Opens in the browser used last | P|
+| 6.4 | "Sirena, search for weather in Lisbon" | Web search in the right browser | P|
+| 6.5 | On a Google results page: "Sirena, first link" | Opens the first organic result, not an ad or "skip to content" |P |
+| 6.6 | "the second one" (follow-up) / "open the third result" | Correct results |P |
+| 6.7 | On YouTube search results: "Sirena, click the third video" | Third video opens | P|
+| 6.8 | "Sirena, go back" | Browser back |P |
+| 6.9 | "Sirena, focus the address bar" | Address bar selected |P |
 
 ## 7. Scrolling and keys
 
 | ID | Say | Expected | Result |
 |---|---|---|---|
-| 7.1 | "Sirena, scroll down" / "scroll up a bit" / "page down" | Scrolls the right amount | |
-| 7.2 | "Sirena, scroll to the top" / "to the bottom" | Jumps | |
-| 7.3 | With the mouse over a sidebar but focus on the main page: "scroll down" | Scrolls the page you are reading (note which pane moved) | |
+| 7.1 | "Sirena, scroll down" / "scroll up a bit" / "page down" | Scrolls the right amount | P|
+| 7.2 | "Sirena, scroll to the top" / "to the bottom" | Jumps |P |
+| 7.3 | With the mouse over a sidebar but focus on the main page: "scroll down" | Scrolls the page you are reading (note which pane moved) | P|
 | 7.4 | "Sirena, control c" / "cmd s" / "escape" / "enter" | Right keys | |
-| 7.5 | "Sirena, alt F4" | Mapped to ⌘W/⌘Q equivalent, asks before closing unsaved work | |
-| 7.6 | "Sirena, control alt delete" | Opens Force Quit (Mac equivalent) and does nothing harmful | |
-| 7.7 | "Sirena, volume down" / "decrease volume" | System volume lowers | |
-| 7.8 | "Sirena, emoji picker" | Emoji picker opens in the text field | |
+| 7.5 | "Sirena, alt F4" | Mapped to ⌘W/⌘Q equivalent, asks before closing unsaved work |P |
+| 7.6 | "Sirena, control alt delete" | Opens Force Quit (Mac equivalent) and does nothing harmful |P |
+| 7.7 | "Sirena, volume down" / "decrease volume" | System volume lowers |P |
+| 7.8 | "Sirena, emoji picker" | Emoji picker opens in the text field | P|
 
 ## 8. Clicking and focusing
 
@@ -176,30 +176,30 @@ Run in Notes, then repeat 10.1–10.5 in Gmail's body, a Chrome address bar, VS 
 
 | ID | Say | Expected | Result |
 |---|---|---|---|
-| 10.1 | "Sirena, type hello world" | "hello world" inserted, clipboard restored afterwards | |
-| 10.2 | "Sirena, start dictating" | Pill turns pearl gold | |
-| 10.3 | "um so basically the meeting is, no wait, moved to Friday" | "The meeting is moved to Friday." (fillers and false start removed) | |
-| 10.4 | "Sirena, new line" / "Sirena, delete that" / "Sirena, undo" | Each works; none of these words are typed | |
-| 10.5 | "Sirena, stop" | Dictation ends; pill back to white | |
-| 10.6 | Dictate a question: "can you send me the file by tomorrow" | Ends with "?" | |
+| 10.1 | "Sirena, type hello world" | "hello world" inserted, clipboard restored afterwards |F |
+| 10.2 | "Sirena, start dictating" | Pill turns pearl gold | P|
+| 10.3 | "um so basically the meeting is, no wait, moved to Friday" | "The meeting is moved to Friday." (fillers and false start removed) |P |
+| 10.4 | "Sirena, new line" / "Sirena, delete that" / "Sirena, undo" | Each works; none of these words are typed | P|
+| 10.5 | "Sirena, stop" | Dictation ends; pill back to white | P|
+| 10.6 | Dictate a question: "can you send me the file by tomorrow" | Ends with "?" | P|
 | 10.7 | Dictate with names and jargon from custom vocabulary | Spelled as in the vocabulary | |
 | 10.8 | Dictate in Portuguese: "comeca a ditar" … "a reunião é amanhã" … "acaba o ditado" | Portuguese text with accents | |
 | 10.9 | Dictate for 3 minutes without stopping, with pauses | Nothing lost or duplicated between pauses | |
 | 10.10 | Dictate while someone else talks nearby | Their words are not typed (or note how much leaks) | |
-| 10.11 | Say "Sirena, switch to Chrome" while dictating | Runs the command, does not type it | |
+| 10.11 | Say "Sirena, switch to Chrome" while dictating | Runs the command, does not type it |P |
 | 10.12 | Turn on **raw dictation** in the menu, repeat 10.3 | Text typed as said, no cleanup | |
 | 10.13 | Dictate in a WhatsApp composer vs a Gmail body | Tone adapts (casual vs formal) without changing meaning | |
-| 10.14 | Click into a different field mid-dictation | Text goes to the new field | |
+| 10.14 | Click into a different field mid-dictation | Text goes to the new field | P|
 | 10.15 | Hold right ⌥ (push-to-talk), speak, release | Text typed without saying "Sirena" | |
 
 ## 11. Lists and text edits
 
 | ID | Say | Expected | Result |
 |---|---|---|---|
-| 11.1 | Dictating: "first point, finish the overlay" … "second point," … "test it on both monitors" | 1. 2. numbered lines, each on its own line | |
-| 11.2 | "next item, buy milk" after an existing list of 3 items in the field | Continues as 4. | |
-| 11.3 | "ponto três, ligar ao banco" | Numbered 3 | |
-| 11.4 | Dictate "eggs milk bread", then "Sirena, make that a list" | Rewritten in place as a list | |
+| 11.1 | Dictating: "first point, finish the overlay" … "second point," … "test it on both monitors" | 1. 2. numbered lines, each on its own line | P|
+| 11.2 | "next item, buy milk" after an existing list of 3 items in the field | Continues as 4. |P |
+| 11.3 | "ponto três, ligar ao banco" | Numbered 3 |P|
+| 11.4 | Dictate "eggs milk bread", then "Sirena, make that a list" | Rewritten in place as a list |P |
 | 11.5 | "Sirena, separate the points with two line breaks" | Reformatted in place | |
 | 11.6 | Dictate a sentence with a grammar error, then "Sirena, fix the grammar" | Fixed in place, meaning unchanged | |
 | 11.7 | Select a paragraph you did **not** dictate, "Sirena, fix the grammar" | Edits the selection only | |
@@ -212,12 +212,12 @@ Use the safe test contact only.
 
 | ID | Say | Expected | Result |
 |---|---|---|---|
-| 12.1 | "Sirena, send a message to <contact> saying see you at 5" | Switches, focuses the composer, types, shows "Send “see you at 5” in WhatsApp? Yes / Cancel" | |
-| 12.2 | "yes" | Sent | |
-| 12.3 | Repeat, answer "cancel" | Not sent; text stays in the box (or is cleared; note which) | |
-| 12.4 | Repeat, press Enter / Esc instead of speaking | Same as yes / cancel | |
-| 12.5 | Repeat, then stay silent 30 s | Nothing sent; the card expires or waits; note which | |
-| 12.6 | Confirmation shown, someone else says "yes" casually in conversation | Note: it sends. Check the card made clear it was waiting | |
+| 12.1 | "Sirena, send a message to <contact> saying see you at 5" | Switches, focuses the composer, types, shows "Send “see you at 5” in WhatsApp? Yes / Cancel" | P|
+| 12.2 | "yes" | Sent | P|
+| 12.3 | Repeat, answer "cancel" | Not sent; text stays in the box (or is cleared; note which) |P |
+| 12.4 | Repeat, press Enter / Esc instead of speaking | Same as yes / cancel | P|
+| 12.5 | Repeat, then stay silent 30 s | Nothing sent; the card expires or waits; note which | P|
+| 12.6 | Confirmation shown, someone else says "yes" casually in conversation | Note: it sends. Check the card made clear it was waiting | P|
 | 12.7 | Confirmation shown, you say "sim" / "não" | Portuguese works | |
 | 12.8 | Type something in a composer by hand, then "Sirena, send" | Asks "Send …?" naming the text, then sends on yes | |
 | 12.9 | "Sirena, send" with an empty composer | No empty confirmation; says there is nothing to send | |
@@ -231,21 +231,21 @@ On the Wikipedia article:
 
 | ID | Say | Expected | Result |
 |---|---|---|---|
-| 13.1 | "Sirena, copy the first paragraph" | Clipboard has the first article paragraph (not the navigation or infobox); it is selected on screen; pill shows the first words | |
-| 13.2 | "Sirena, copy the paragraph about <topic in the article>" | Right paragraph | |
-| 13.3 | "Sirena, copy the paragraph that starts with <first words>" | Right paragraph | |
+| 13.1 | "Sirena, copy the first paragraph" | Clipboard has the first article paragraph (not the navigation or infobox); it is selected on screen; pill shows the first words | P|
+| 13.2 | "Sirena, copy the paragraph about <topic in the article>" | Right paragraph | P|
+| 13.3 | "Sirena, copy the paragraph that starts with <first words>" | Right paragraph | P|
 | 13.4 | "Sirena, copy the title" / "copy the second sentence" | Right text | |
-| 13.5 | In WhatsApp/Slack: "Sirena, copy the last message" | Last message text | |
-| 13.6 | "Sirena, select the third paragraph" | Selected, clipboard untouched | |
-| 13.7 | "Sirena, copy the paragraph about penguins" (not on the page) | Says it did not find it; clipboard untouched | |
+| 13.5 | In WhatsApp/Slack: "Sirena, copy the last message" | Last message text |F |
+| 13.6 | "Sirena, select the third paragraph" | Selected, clipboard untouched | P|
+| 13.7 | "Sirena, copy the paragraph about penguins" (not on the page) | Says it did not find it; clipboard untouched |P |
 
 ## 14. Read aloud
 
 | ID | Say | Expected | Result |
 |---|---|---|---|
 | 14.1 | Select text, "Sirena, read this" | Reads the selection | |
-| 14.2 | "Sirena, read the article" | Article only: no menus, sidebars, ads, reference lists | |
-| 14.3 | "Sirena, read the page" | All visible text | |
+| 14.2 | "Sirena, read the article" | Article only: no menus, sidebars, ads, reference lists | P|
+| 14.3 | "Sirena, read the page" | All visible text | P|
 | 14.4 | While reading: "faster", "slower", "pause", "resume", "stop" (no name) | Each works | |
 | 14.5 | While reading, on **speakers**, no headphones | She never acts on her own voice (e.g. an article containing "next tab" or "scroll down") | |
 | 14.6 | Read a Portuguese article | Portuguese voice | |
@@ -255,15 +255,15 @@ On the Wikipedia article:
 
 | ID | Do / Say | Expected | Result |
 |---|---|---|---|
-| 15.1 | Look at both screens | A pill on each; the one with the front window marked, the other dimmed | |
-| 15.2 | "Sirena, move this window to the other screen" | Window moves; marker follows | |
+| 15.1 | Look at both screens | A pill on each; the one with the front window marked, the other dimmed | P|
+| 15.2 | "Sirena, move this window to the other screen" | Window moves; marker follows | P|
 | 15.3 | "Sirena, move this window to the left monitor" / "to screen 2" | Correct screen | |
-| 15.4 | "Sirena, switch to the other screen" | Topmost window there focused; pointer moves | |
-| 15.5 | Drag the pill somewhere on each screen; restart Sirena | Each screen keeps its own position | |
+| 15.4 | "Sirena, switch to the other screen" | Topmost window there focused; pointer moves | P|
+| 15.5 | Drag the pill somewhere on each screen; restart Sirena | Each screen keeps its own position | P|
 | 15.6 | Unplug and replug the monitor | Pills rebuilt, no crash, no ghost pill | |
-| 15.7 | Make an app full screen | Pill still visible over it | |
-| 15.8 | Switch Spaces | Pill on every Space | |
-| 15.9 | Click the pill while typing in an app | Focus stays in the app (non-activating) | |
+| 15.7 | Make an app full screen | Pill still visible over it | P|
+| 15.8 | Switch Spaces | Pill on every Space | P|
+| 15.9 | Click the pill while typing in an app | Focus stays in the app (non-activating) |P |
 | 15.10 | Menu → larger overlay | Bigger, still readable, not covering content badly | |
 | 15.11 | Watch the pill through a whole session | Shows live partials, front app icon and name, pearl gold in dictation, silver lilac while reading, countdown ring after commands | |
 
@@ -271,17 +271,17 @@ On the Wikipedia article:
 
 | ID | Say | Expected | Result |
 |---|---|---|---|
-| 16.1 | In any app: "Sirena, note call the bank tomorrow" | Saved; you stay in the app | |
-| 16.2 | Open Notes & snippets window | Note is there, editable | |
-| 16.3 | Add a snippet "my email"; in a field say "Sirena, insert my email" | Email typed | |
+| 16.1 | In any app: "Sirena, note call the bank tomorrow" | Saved; you stay in the app | P|
+| 16.2 | Open Notes & snippets window | Note is there, editable | P|
+| 16.3 | Add a snippet "my email"; in a field say "Sirena, insert my email" | Email typed | P|
 | 16.4 | "Sirena, insert my passport number" (no such snippet) | Says no snippet; does not type the words | |
 
 ## 17. Shortcut book and Apple Shortcuts
 
 | ID | Do / Say | Expected | Result |
 |---|---|---|---|
-| 17.1 | Add "call mom" = "open WhatsApp, select Mother and call her" | Steps written following the rulebook; you can review and edit before saving; a confirm step before calling | |
-| 17.2 | "Sirena, call mom" | Confirmation "Call Mother on WhatsApp?"; cancel it (or call your test contact) | |
+| 17.1 | Add "call mom" = "open WhatsApp, select Mother and call her" | Steps written following the rulebook; you can review and edit before saving; a confirm step before calling | P|
+| 17.2 | "Sirena, call mom" | Confirmation "Call Mother on WhatsApp?"; cancel it (or call your test contact) | P|
 | 17.3 | Add "message {person} saying {text}"; say "Sirena, message <contact> saying running late" | Placeholders filled; confirms before sending | |
 | 17.4 | "Sirena, run call mom" and "Sirena, call my mom" (fuzzy) | Both run it | |
 | 17.5 | Create an Apple Shortcut "Morning Routine"; "Sirena, run Morning Routine" | Runs it | |
@@ -292,9 +292,9 @@ On the Wikipedia article:
 
 | ID | Say | Expected | Result |
 |---|---|---|---|
-| 18.1 | After "Sirena, type hello": "Sirena, undo" | Text removed | |
-| 18.2 | After "Sirena, switch to Chrome": "Sirena, undo" | Previous app back | |
-| 18.3 | After a tab switch: "Sirena, undo" | Previous tab back | |
+| 18.1 | After "Sirena, type hello": "Sirena, undo" | Text removed | F|
+| 18.2 | After "Sirena, switch to Chrome": "Sirena, undo" | Previous app back | F|
+| 18.3 | After a tab switch: "Sirena, undo" | Previous tab back |F |
 | 18.4 | During a slow model command: "Sirena, cancel" | Stops; nothing more happens | |
 | 18.5 | "cancela" / "anula isso" / "desfaz" | Portuguese works | |
 | 18.6 | "Sirena, do that again" after a scroll | Scrolls again | |
@@ -317,10 +317,10 @@ On the Wikipedia article:
 
 | ID | Do / Say | Expected | Result |
 |---|---|---|---|
-| 20.1 | Play a song with vocals on the Mac speakers, Sirena awake, say nothing for 1 minute | No lyrics in the overlay; nothing runs; nothing typed | |
-| 20.2 | Same, while dictating in Notes | No lyrics typed | |
-| 20.3 | Song playing loud: "Sirena, scroll down" | Runs (first few seconds of music may need to pass while the canceller learns) | |
-| 20.4 | Song with "hey" in the lyrics, Sirena waiting | Does not wake | |
+| 20.1 | Play a song with vocals on the Mac speakers, Sirena awake, say nothing for 1 minute | No lyrics in the overlay; nothing runs; nothing typed | F|
+| 20.2 | Same, while dictating in Notes | No lyrics typed | F|
+| 20.3 | Song playing loud: "Sirena, scroll down" | Runs (first few seconds of music may need to pass while the canceller learns) | F|
+| 20.4 | Song with "hey" in the lyrics, Sirena waiting | Does not wake | F|
 | 20.5 | YouTube video with someone saying "next" or "stop" | Nothing happens | |
 | 20.6 | Same with headphones | Nothing to cancel; commands work | |
 | 20.7 | Menu → turn off "Ignore music and videos playing on this Mac", play music | Lyrics may come through (expected); turning it back on fixes it | |
