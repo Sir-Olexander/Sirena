@@ -1,3 +1,5 @@
+<p align="center"><img src="Resources/Logo.svg" alt="Sirena logo" width="200"></p>
+
 # Sirena
 
 Sirena is a macOS menu bar app that lets you use your Mac **hands-free**. You talk to her to control the
@@ -51,8 +53,8 @@ mic ──► Muse Voice Transcribe (ENDPOINTING) ──► utterance router ─
 * **Overlay on every screen.** A non-activating floating panel that never takes focus, on every connected screen
   and Space, over full-screen apps. All copies show the same state; the one on the screen with the front window
   is marked, the others are dimmed. Each screen remembers its own position. The expanded pill shows the front
-  app's icon and name; the sound wave appears only while expanded or dictating; dictation is amber, reading
-  violet. Optional per-stage latency (speech recognition · understanding · action).
+  app's icon and name; the sound wave appears only while expanded or dictating. The colors follow the logo
+  (moonlight white on black): dictation is pearl gold, reading silver lilac. Optional per-stage latency (speech recognition · understanding · action).
 * **Several screens.** "Sirena, move this window to the other screen / the left monitor / screen 2" and
   "Sirena, switch to the other screen" (focuses the topmost window there and moves the pointer).
 * **Copy text without selecting it.** "Copy the first paragraph / the paragraph about … / the paragraph that starts with …
@@ -116,6 +118,9 @@ optimizer hangs on this code base), assembles `build/Sirena.app`, and signs it w
 Apple Development identity (set `SIRENA_SIGN_IDENTITY` to pick one). Signing with the same identity every
 time keeps the permission grants across rebuilds. Without an identity it falls back to an ad-hoc signature,
 which makes macOS forget the permissions after each rebuild.
+
+The app icon, `Resources/AppIcon.icns`, is made from the logo in `Resources/Logo.svg`. After changing the
+logo, run `scripts/make-icon.sh` to rebuild it.
 
 Run the tests with `swift test`.
 
@@ -247,7 +252,8 @@ Sources/SirenaObjC        catches Objective-C exceptions from AVAudioEngine
 Sources/SirenaCore/Overlay    the pill
 Tests/                    parser and router tests
 docs/                     demo script and architecture notes
-scripts/                  build and run
+Resources/                Info.plist, entitlements, logo (Logo.svg) and app icon (AppIcon.icns)
+scripts/                  build and run, app icon
 ```
 
 ## Privacy

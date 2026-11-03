@@ -240,10 +240,15 @@ case "render-overlay":
         let m = OverlayModel()
         setup(m)
         RunLoop.main.run(until: Date().addingTimeInterval(0.15))
-        let view = NSHostingView(rootView: OverlayView(model: m, screenID: screen).padding(10).background(Color(nsColor: .windowBackgroundColor)))
+        // Transparent background, Retina scale: the PNGs show the pill as it floats over the desktop.
+        let view = NSHostingView(rootView: OverlayView(model: m, screenID: screen).padding(10))
         view.frame = NSRect(origin: .zero, size: view.fittingSize)
         view.layoutSubtreeIfNeeded()
-        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+        let px = 2
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(view.bounds.width) * px, pixelsHigh: Int(view.bounds.height) * px,
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return }
+        rep.size = view.bounds.size
         view.cacheDisplay(in: view.bounds, to: rep)
         try? rep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent("\(name).png"))
         print("rendered \(name) \(Int(view.bounds.width))x\(Int(view.bounds.height))")
@@ -259,6 +264,7 @@ case "render-overlay":
     render("4-awake-compact") { m in m.setState(.awake) }
     render("5-dictating") { m in m.setState(.awake); m.setDictating(true); m.setPartial("um so the meeting is moved to Friday"); for _ in 0..<30 { m.pushLevel(Float.random(in: 0.05...0.7)) } }
     render("6-reading") { m in m.setState(.awake); m.setFrontApp(name: "Google Chrome", icon: icon); m.setReading(.reading, title: "How Muse Spark works", progress: 0.35) }
+    render("6b-error") { m in m.setState(.awake); m.showError("Could not find “Send” in WhatsApp") }
     render("7-confirm") { m in m.setState(.awake); m.showConfirm("Click “Send” in WhatsApp?", detail: "Safety check: the agent is about to send a message.") }
     render("8-screen-active", screen: "A") { m in m.setState(.awake); m.setScreenCount(2); m.setActiveScreen("A"); m.setFrontApp(name: "Google Chrome", icon: icon); m.showWorking("Moved Google Chrome to screen 2", autoClear: 60) }
     render("9-screen-inactive", screen: "B") { m in m.setState(.awake); m.setScreenCount(2); m.setActiveScreen("A"); m.setFrontApp(name: "Google Chrome", icon: icon); m.showWorking("Moved Google Chrome to screen 2", autoClear: 60) }
