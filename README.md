@@ -53,8 +53,8 @@ mic ──► Muse Voice Transcribe (ENDPOINTING) ──► utterance router ─
 * **Overlay on every screen.** A non-activating floating panel that never takes focus, on every connected screen
   and Space, over full-screen apps. All copies show the same state; the one on the screen with the front window
   is marked, the others are dimmed. Each screen remembers its own position. The expanded pill shows the front
-  app's icon and name; the sound wave appears only while expanded or dictating; dictation is amber, reading
-  violet. Optional per-stage latency (speech recognition · understanding · action).
+  app's icon and name; the sound wave appears only while expanded or dictating. The colors follow the logo
+  (moonlight white on black): dictation is pearl gold, reading silver lilac. Optional per-stage latency (speech recognition · understanding · action).
 * **Several screens.** "Sirena, move this window to the other screen / the left monitor / screen 2" and
   "Sirena, switch to the other screen" (focuses the topmost window there and moves the pointer).
 * **Copy text without selecting it.** "Copy the first paragraph / the paragraph about … / the paragraph that starts with …

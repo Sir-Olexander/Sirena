@@ -177,10 +177,10 @@ Run in Notes, then repeat 10.1–10.5 in Gmail's body, a Chrome address bar, VS 
 | ID | Say | Expected | Result |
 |---|---|---|---|
 | 10.1 | "Sirena, type hello world" | "hello world" inserted, clipboard restored afterwards | |
-| 10.2 | "Sirena, start dictating" | Pill turns amber | |
+| 10.2 | "Sirena, start dictating" | Pill turns pearl gold | |
 | 10.3 | "um so basically the meeting is, no wait, moved to Friday" | "The meeting is moved to Friday." (fillers and false start removed) | |
 | 10.4 | "Sirena, new line" / "Sirena, delete that" / "Sirena, undo" | Each works; none of these words are typed | |
-| 10.5 | "Sirena, stop" | Dictation ends; pill back to blue | |
+| 10.5 | "Sirena, stop" | Dictation ends; pill back to white | |
 | 10.6 | Dictate a question: "can you send me the file by tomorrow" | Ends with "?" | |
 | 10.7 | Dictate with names and jargon from custom vocabulary | Spelled as in the vocabulary | |
 | 10.8 | Dictate in Portuguese: "comeca a ditar" … "a reunião é amanhã" … "acaba o ditado" | Portuguese text with accents | |
@@ -265,7 +265,7 @@ On the Wikipedia article:
 | 15.8 | Switch Spaces | Pill on every Space | |
 | 15.9 | Click the pill while typing in an app | Focus stays in the app (non-activating) | |
 | 15.10 | Menu → larger overlay | Bigger, still readable, not covering content badly | |
-| 15.11 | Watch the pill through a whole session | Shows live partials, front app icon and name, amber in dictation, violet while reading, countdown ring after commands | |
+| 15.11 | Watch the pill through a whole session | Shows live partials, front app icon and name, pearl gold in dictation, silver lilac while reading, countdown ring after commands | |
 
 ## 16. Notes and snippets
 

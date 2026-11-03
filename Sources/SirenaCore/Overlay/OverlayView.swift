@@ -17,12 +17,12 @@ public struct OverlayView: View {
     private var showsScreenMarker: Bool { model.state != .off && model.screenCount > 1 && isActiveScreen && model.activeScreenID != nil }
 
     private var accent: Color {
-        if model.readingState != .idle { return Color(red: 0.62, green: 0.52, blue: 1.0) }
-        if model.isDictating { return Color(red: 1.0, green: 0.62, blue: 0.18) }
+        if model.readingState != .idle { return SirenaPalette.lilac }
+        if model.isDictating { return SirenaPalette.pearl }
         switch model.state {
-        case .off: return Color.gray
-        case .waiting: return Color(white: 0.6)
-        case .awake: return Color(red: 0.25, green: 0.78, blue: 0.92)
+        case .off: return SirenaPalette.silver
+        case .waiting: return SirenaPalette.silver
+        case .awake: return SirenaPalette.moonlight
         }
     }
 
@@ -59,7 +59,7 @@ public struct OverlayView: View {
 
     private var offDot: some View {
         Circle()
-            .fill(Color.gray.opacity(0.55))
+            .fill(SirenaPalette.silver.opacity(0.45))
             .frame(width: 14 * scale, height: 14 * scale)
             .overlay(Circle().stroke(Color.white.opacity(0.35), lineWidth: 1))
             .padding(8)
@@ -75,7 +75,7 @@ public struct OverlayView: View {
         }
         .foregroundColor(.white.opacity(0.75))
         .padding(.horizontal, 10 * scale).padding(.vertical, 5 * scale)
-        .background(Capsule().fill(Color.black.opacity(0.55)))
+        .background(Capsule().fill(SirenaPalette.ink.opacity(0.6)))
         .overlay(Capsule().stroke(Color.white.opacity(0.15), lineWidth: 1))
         .padding(6)
         .contentShape(Rectangle())
@@ -158,10 +158,10 @@ public struct OverlayView: View {
     }
 
     private var pillColor: Color {
-        if case .error = model.mode { return Color(red: 0.45, green: 0.12, blue: 0.12).opacity(0.92) }
-        if model.readingState != .idle { return Color(red: 0.16, green: 0.12, blue: 0.32).opacity(0.92) }
-        if model.isDictating { return Color(red: 0.32, green: 0.18, blue: 0.04).opacity(0.92) }
-        return Color.black.opacity(0.78)
+        if case .error = model.mode { return SirenaPalette.errorFill }
+        if model.readingState != .idle { return SirenaPalette.lilacFill }
+        if model.isDictating { return SirenaPalette.pearlFill }
+        return SirenaPalette.inkFill
     }
 
     private var dotWithRing: some View {
@@ -236,8 +236,8 @@ public struct OverlayView: View {
                 }
             }
             HStack(spacing: 10 * scale) {
-                confirmButton("Yes", systemImage: "checkmark", tint: Color(red: 0.2, green: 0.75, blue: 0.4))
-                confirmButton("Cancel", systemImage: "xmark", tint: Color(white: 0.45))
+                confirmButton("Yes", systemImage: "checkmark", fill: SirenaPalette.moonlight, text: SirenaPalette.ink)
+                confirmButton("Cancel", systemImage: "xmark", fill: SirenaPalette.silver.opacity(0.18), text: .white, outline: SirenaPalette.silver.opacity(0.6))
                 Spacer()
                 Text("say “yes” or “cancel”")
                     .font(.system(size: 10 * scale))
@@ -248,17 +248,18 @@ public struct OverlayView: View {
             }
         }
         .padding(.horizontal, 16 * scale).padding(.vertical, 12 * scale)
-        .background(RoundedRectangle(cornerRadius: 16 * scale).fill(Color.black.opacity(0.85)))
+        .background(RoundedRectangle(cornerRadius: 16 * scale).fill(SirenaPalette.ink.opacity(0.9)))
         .overlay(RoundedRectangle(cornerRadius: 16 * scale).stroke(accent.opacity(0.7), lineWidth: 1.5))
         .shadow(color: .black.opacity(0.4), radius: 14, y: 4)
     }
 
-    private func confirmButton(_ title: String, systemImage: String, tint: Color) -> some View {
+    private func confirmButton(_ title: String, systemImage: String, fill: Color, text: Color, outline: Color = .clear) -> some View {
         Label(title, systemImage: systemImage)
             .font(.system(size: 12 * scale, weight: .semibold))
-            .foregroundColor(.white)
+            .foregroundColor(text)
             .padding(.horizontal, 12 * scale).padding(.vertical, 6 * scale)
-            .background(Capsule().fill(tint))
+            .background(Capsule().fill(fill))
+            .overlay(Capsule().stroke(outline, lineWidth: 1))
             .background(GeometryReader { g in
                 Color.clear.preference(key: ConfirmFramesKey.self, value: [title == "Yes" ? "yes" : "cancel": g.frame(in: .named("overlay"))])
             })

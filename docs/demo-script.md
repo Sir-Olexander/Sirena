@@ -14,9 +14,9 @@ Latency display on (menu bar → "Show latency in the overlay").
    "Sirena, send a message to Claude saying summarize the page I just read" → the message is typed and the
    big confirm card appears: "Send this message to Claude? Yes / Cancel".
    "Yes" → Enter is pressed, the message is sent.
-4. "Sirena, switch to Notes" → "Sirena, start dictating" (pill turns amber).
+4. "Sirena, switch to Notes" → "Sirena, start dictating" (pill turns pearl gold).
    "um so basically the meeting is, no wait, moved to Friday" → "The meeting is moved to Friday." appears.
-   "Sirena, stop" → pill back to blue.
+   "Sirena, stop" → pill back to white.
 5. "Sirena, show numbers" → yellow badges on every button of Notes. "Sirena, click 4" → that button is clicked.
 6. "Sirena, wait" → the pill dims to "Say “Hey Sirena”". Say "scroll down": nothing happens.
    "Hey Sirena" → she wakes up.
