@@ -11,7 +11,7 @@ echo "▸ swift build ($CONFIG)"
 # Per-file optimization: the whole-module optimizer of Swift 6.2 hangs on this code base.
 EXTRA=()
 [ "$CONFIG" = "release" ] && EXTRA=(-Xswiftc -no-whole-module-optimization)
-swift build -c "$CONFIG" --product Sirena "${EXTRA[@]}" 2>&1 | grep -Ev '^\[|^Compiling|^Build complete|^Fetching|^Creating' || true
+swift build -c "$CONFIG" --product Sirena ${EXTRA[@]+"${EXTRA[@]}"} 2>&1 | grep -Ev '^\[|^Compiling|^Build complete|^Fetching|^Creating' || true
 BIN=".build/$CONFIG/Sirena"
 [ -x "$BIN" ] || { echo "build failed: $BIN missing"; exit 1; }
 
