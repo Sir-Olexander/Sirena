@@ -46,6 +46,10 @@ public final class ListeningController {
     private var speechEnds: [Int: Date] = [:]
     /// Latest partial transcript of the utterance in progress.
     private var lastPartial = ""
+    /// The recognizer turn in progress (from its speech start).
+    private var currentTurn = 0
+    /// "Hey Sirena" woke her from a draft (partial) transcript of this turn; its final transcript decides the rest.
+    private var earlyWake: (turn: Int, at: Date)?
     /// Dictation inserts and edits still queued or running.
     private var pendingDictationWork = 0
 
@@ -392,6 +396,7 @@ public final class ListeningController {
 
     public func turnOff() {
         guard state != .off else { return }
+        earlyWake = nil
         reader.stop()
         stopLocalWake(replay: false)
         if !simulateInput { audio.stop(); transcriber.stop() }
@@ -411,8 +416,11 @@ public final class ListeningController {
         Log.listening.info("turned off")
     }
 
-    public func wait() {
+    public func wait() { wait(quiet: false) }
+
+    private func wait(quiet: Bool) {
         guard state == .awake else { return }
+        earlyWake = nil
         isDictating = false
         dictation.reset()
         closeFollowUpWindow()
@@ -422,7 +430,7 @@ public final class ListeningController {
         state = .waiting
         onStateChange?(.waiting)
         overlay.setPartial("")
-        overlay.showWorking("Say “Hey Sirena” to wake me", autoClear: 2.5)
+        if quiet { overlay.clearMode() } else { overlay.showWorking("Say “Hey Sirena” to wake me", autoClear: 2.5) }
         startLocalWakeIfPossible()
         Log.listening.info("waiting")
     }
@@ -479,6 +487,31 @@ public final class ListeningController {
         resetIdleTimer()
         openFollowUpWindow(duration: settings.followUpAfterWake)
         Log.listening.info("awake")
+    }
+
+    /// The draft transcript reads "Hey Sirena": wake now. The final transcript of the same turn follows.
+    private func wakeEarly(partial: String) {
+        wake(method: "stream")
+        earlyWake = (currentTurn, Date())
+        history.append(HistoryEntry(utterance: partial, route: "wake", result: "early (draft transcript)", wakeMethod: "stream"))
+        Log.listening.notice("woke from the draft transcript “\(partial, privacy: .public)”")
+    }
+
+    /// The final transcript of a turn that already woke her: run what was said after "Hey Sirena", or go back to
+    /// waiting if the recognizer changed its mind ("Hey Serena's mom called" is not a wake phrase).
+    private func finishEarlyWake(_ text: String, asrMs: Int?) {
+        switch UtteranceRouter.afterEarlyWake(final: text) {
+        case .stayAwake:
+            pipeline.discardPrepared()
+        case .command(let cmd):
+            history.append(HistoryEntry(utterance: text, route: "wake", latency: LatencyReport(asrMs: asrMs), command: cmd, wakeMethod: "stream"))
+            pipeline.handle(command: cmd, asrMs: asrMs)
+        case .withdraw:
+            pipeline.discardPrepared()
+            history.append(HistoryEntry(utterance: text, route: "wake withdrawn", result: "final transcript is not a wake phrase", latency: LatencyReport(asrMs: asrMs)))
+            Log.listening.notice("early wake withdrawn: final transcript “\(text, privacy: .public)”")
+            wait(quiet: true)
+        }
     }
 
     // MARK: - Sessions
@@ -559,10 +592,14 @@ public final class ListeningController {
             if state == .awake { overlay.setSpeaking(true) }
             speechStarts = speechStarts.filter { Date().timeIntervalSince($0.value) < 60 }
             speechStarts[turn] = Date()
+            currentTurn = turn
             resetIdleTimer()
         case .partial(let text):
             if state == .awake { overlay.setPartial(text) }
             lastPartial = text
+            // Wake on the draft text instead of waiting for the recognizer to decide the speech is over
+            // (a pause, then ~0.7 s for the final text): about two seconds sooner.
+            if state == .waiting, UtteranceRouter.wakesEarly(partial: text) { wakeEarly(partial: text) }
         case .speechEnd(let turn):
             overlay.setSpeaking(false)
             speechEnds = speechEnds.filter { Date().timeIntervalSince($0.value) < 60 }
@@ -578,11 +615,19 @@ public final class ListeningController {
                 Log.speech.notice("final text \(tail) ms after the end of speech was detected (recognizer total \(asr ?? -1) ms)")
             }
             let start = utteranceStart(text: text, asrMs: asr, recorded: speechStarts.removeValue(forKey: turn))
+            if let early = earlyWake {
+                earlyWake = nil
+                if early.turn == turn, state == .awake {
+                    finishEarlyWake(text, asrMs: asr)
+                    return
+                }
+            }
             route(text, asrMs: asr, spokeAt: start)
         case .error(let msg):
             overlay.showError(msg)
         case .disconnected(let code, let reason):
             Log.speech.notice("asr disconnected \(code) \(reason, privacy: .public)")
+            earlyWake = nil   // a new session numbers its turns afresh
             if transcriber.realtimeLooksUnavailable, let fb = fallback, !usingFallback {
                 usingFallback = true
                 transcriber.stop()

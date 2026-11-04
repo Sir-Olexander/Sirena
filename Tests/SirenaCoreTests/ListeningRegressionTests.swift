@@ -452,3 +452,23 @@ final class SpeculationTests: XCTestCase {
         XCTAssertTrue(pipeline.needsModel("what's the capital of France"))
     }
 }
+
+/// Waking on the draft transcript: only an exact wake phrase wakes early, and the final transcript decides the rest.
+final class EarlyWakeTests: XCTestCase {
+    func testDraftsThatWakeEarly() {
+        for draft in ["Hey Sirena", "hey serena", "Hey Sirena.", "Sirena, wake up", "OK Sirena"] {
+            XCTAssertTrue(UtteranceRouter.wakesEarly(partial: draft), draft)
+        }
+        for draft in ["Hey", "Sirena", "I told Sirena", "hey sirena's", "they said hey Sirena", "Hey Sirena switch"] {
+            XCTAssertFalse(UtteranceRouter.wakesEarly(partial: draft), draft)
+        }
+    }
+
+    func testFinalTranscriptAfterAnEarlyWake() {
+        XCTAssertEqual(UtteranceRouter.afterEarlyWake(final: "Hey Sirena."), .stayAwake)
+        XCTAssertEqual(UtteranceRouter.afterEarlyWake(final: "Hey Sirena, switch to Chrome."), .command("switch to Chrome."))
+        XCTAssertEqual(UtteranceRouter.afterEarlyWake(final: "Hey Serena's mom called"), .withdraw)
+        // A song line that starts like the wake phrase only wakes her, as before.
+        XCTAssertEqual(UtteranceRouter.afterEarlyWake(final: "Hey Sirena to my party in the club I'm so and everybody knows it"), .stayAwake)
+    }
+}
