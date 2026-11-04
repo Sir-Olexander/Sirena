@@ -8,7 +8,7 @@ public struct OverlayView: View {
 
     public init(model: OverlayModel, screenID: String? = nil) { self.model = model; self.screenID = screenID }
 
-    private var scale: CGFloat { model.large ? 1.3 : 1.0 }
+    private var scale: CGFloat { model.large ? 1.15 : 1.0 }
 
     /// This copy is on the screen with the front window (always true with a single screen).
     private var isActiveScreen: Bool {
@@ -73,12 +73,13 @@ public struct OverlayView: View {
 
     private var waitingPill: some View {
         HStack(spacing: 6 * scale) {
-            Image(systemName: model.privateListening ? "lock.fill" : "moon.zzz.fill").font(.system(size: 9 * scale))
+            Image(systemName: model.privateListening ? "lock.fill" : "moon.zzz.fill").font(.system(size: 8.5 * scale))
             Text(model.connectionNote ?? (model.privateListening ? "Say “Hey Sirena” · on-device" : "Say “Hey Sirena”"))
-                .font(.system(size: 10.5 * scale, weight: .medium))
+                .font(.system(size: 10 * scale, weight: .medium))
         }
-        .foregroundColor(.white.opacity(0.75))
-        .padding(.horizontal, 9 * scale).padding(.vertical, 3.5 * scale)
+        .foregroundColor(.white.opacity(0.92))
+        .shadow(color: .black.opacity(0.75), radius: 1)
+        .padding(.horizontal, 8 * scale).padding(.vertical, 2.5 * scale)
         .background(Capsule().fill(SirenaPalette.restFill))
         .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.5))
         .padding(6)
@@ -97,20 +98,20 @@ public struct OverlayView: View {
     }
 
     private var mainPill: some View {
-        HStack(spacing: 6 * scale) {
+        HStack(spacing: 5 * scale) {
             dotWithRing
             if expanded {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 5 * scale) {
                         if model.readingState != .idle {
                             Image(systemName: model.readingState == .paused ? "pause.fill" : "speaker.wave.2.fill")
                                 .font(.system(size: 11 * scale)).foregroundColor(accent)
                         }
                         Text(primaryLine)
-                            .font(.system(size: 12 * scale, weight: .medium))
+                            .font(.system(size: 11 * scale, weight: .medium))
                             .lineLimit(1)
                             .truncationMode(.head)
-                            .frame(maxWidth: 420 * scale, alignment: .leading)
+                            .frame(maxWidth: 380 * scale, alignment: .leading)
                     }
                     if model.readingState != .idle {
                         GeometryReader { g in
@@ -124,19 +125,21 @@ public struct OverlayView: View {
                     secondaryRow
                 }
                 .foregroundColor(.white.opacity(0.95))
+                .shadow(color: .black.opacity(0.55), radius: 1)
                 .transition(.opacity.combined(with: .move(edge: .leading)))
             } else {
                 Text(model.isDictating ? "Dictating" : "Listening")
-                    .font(.system(size: 10.5 * scale, weight: .medium))
-                    .foregroundColor(.white.opacity(0.75))
+                    .font(.system(size: 10 * scale, weight: .medium))
+                    .foregroundColor(.white.opacity(0.92))
+                    .shadow(color: .black.opacity(0.75), radius: 1)
             }
             // The sound wave only while expanded or dictating.
             if (expanded || model.isDictating) && model.readingState == .idle { waveform }
         }
-        .padding(.leading, 7 * scale).padding(.trailing, 10 * scale).padding(.vertical, (expanded ? 4.5 : 3) * scale)
+        .padding(.leading, 6 * scale).padding(.trailing, 9 * scale).padding(.vertical, (expanded ? 3 : 2) * scale)
         .background(Capsule().fill(pillColor))
-        .overlay(Capsule().stroke(accent.opacity(0.3), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.2), radius: 6, y: 2)
+        .overlay(Capsule().stroke(accent.opacity(0.22), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
         .contentShape(Capsule())
     }
 
@@ -146,15 +149,15 @@ public struct OverlayView: View {
             HStack(spacing: 4 * scale) {
                 if let name = model.frontAppName {
                     if let icon = model.frontAppIcon {
-                        Image(nsImage: icon).resizable().interpolation(.high).frame(width: 12 * scale, height: 12 * scale)
+                        Image(nsImage: icon).resizable().interpolation(.high).frame(width: 10 * scale, height: 10 * scale)
                     }
-                    Text(name).font(.system(size: 10 * scale, weight: .semibold)).foregroundColor(.white.opacity(0.75))
+                    Text(name).font(.system(size: 9 * scale, weight: .semibold)).foregroundColor(.white.opacity(0.75))
                 }
                 if let note {
                     if model.frontAppName != nil { Text("·").foregroundColor(.white.opacity(0.4)) }
                     Text(note)
-                        .font(.system(size: 10 * scale, weight: .regular, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.6))
+                        .font(.system(size: 9 * scale, weight: .regular, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.72))
                 }
             }
             .lineLimit(1)
@@ -174,29 +177,29 @@ public struct OverlayView: View {
             if let p = model.followUpProgress {
                 Circle()
                     .trim(from: 0, to: p)
-                    .stroke(accent, style: StrokeStyle(lineWidth: 1.5 * scale, lineCap: .round))
+                    .stroke(accent, style: StrokeStyle(lineWidth: 1.25 * scale, lineCap: .round))
                     .rotationEffect(.degrees(-90))
-                    .frame(width: 13 * scale, height: 13 * scale)
+                    .frame(width: 11 * scale, height: 11 * scale)
             }
             Circle()
                 .fill(accent)
-                .frame(width: 7 * scale, height: 7 * scale)
+                .frame(width: 6 * scale, height: 6 * scale)
                 .scaleEffect(model.isSpeaking ? 1.25 : 1.0)
-                .shadow(color: accent.opacity(0.8), radius: model.isSpeaking ? 4 : 1.5)
+                .shadow(color: accent.opacity(0.7), radius: model.isSpeaking ? 3 : 1)
                 .animation(.easeInOut(duration: 0.15), value: model.isSpeaking)
         }
-        .frame(width: 14 * scale, height: 14 * scale)
+        .frame(width: 12 * scale, height: 12 * scale)
     }
 
     private var waveform: some View {
         HStack(alignment: .center, spacing: 1.5 * scale) {
-            ForEach(Array(model.levels.suffix(14).enumerated()), id: \.offset) { _, v in
+            ForEach(Array(model.levels.suffix(10).enumerated()), id: \.offset) { _, v in
                 RoundedRectangle(cornerRadius: 1)
                     .fill(accent.opacity(0.9))
-                    .frame(width: 1.5 * scale, height: max(2, CGFloat(v) * 11 * scale + 2))
+                    .frame(width: 1.5 * scale, height: max(1.5, CGFloat(v) * 8 * scale + 1.5))
             }
         }
-        .frame(height: 13 * scale)
+        .frame(height: 10 * scale)
         .animation(.linear(duration: 0.08), value: model.levels)
     }
 
