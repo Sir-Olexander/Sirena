@@ -92,10 +92,12 @@ public final class ScreenContext {
         return snap
     }
 
-    private func isElectronLike(_ app: AppInfo) -> Bool {
+    static func isElectronLike(_ app: AppInfo) -> Bool {
         guard let url = app.app.bundleURL else { return false }
         return FileManager.default.fileExists(atPath: url.appendingPathComponent("Contents/Frameworks/Electron Framework.framework").path)
     }
+
+    private func isElectronLike(_ app: AppInfo) -> Bool { ScreenContext.isElectronLike(app) }
 
     func cachedBrowserInfo(for app: AppInfo) -> BrowserInfo? {
         if let c = lastBrowserInfo, c.pid == app.pid, Date().timeIntervalSince(c.at) < 1.0 { return c.info }
@@ -114,6 +116,8 @@ public final class ScreenContext {
     public func keywords(snapshot: ScreenSnapshot? = nil) -> [String] {
         let snap = snapshot ?? lastSnapshot ?? self.snapshot(includeElements: false)
         var out: [String] = ["Sirena", "Hey Sirena"]
+        // Sirena's own control words the recognizer gets wrong without a hint ("undo" was heard as "Ando").
+        out += ["undo", "dictating", "dictation", "numbers", "cancel", "scroll"]
         out += customVocabulary()
         out += snap.apps.map(\.name)
         func titleWords(_ t: String) -> String? {

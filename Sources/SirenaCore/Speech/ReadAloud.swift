@@ -201,12 +201,19 @@ public final class ReadAloud {
 
     // MARK: - Echo filter
 
+    /// The words of the sentences around the one being read: what the microphone hears of Sirena's own voice.
+    private var echoWindow: Set<String> {
+        guard !sentences.isEmpty else { return [] }
+        let lo = max(0, playing - 3), hi = min(sentences.count - 1, playing + 2)
+        guard lo <= hi else { return [] }
+        return Set(WakeWord.normalize(sentences[lo...hi].joined(separator: " ")).split(separator: " ").map(String.init))
+    }
+
     /// True when `transcript` is most likely the microphone hearing Sirena read.
     public func isLikelyEcho(_ transcript: String) -> Bool {
         guard recentlyActive, !sentences.isEmpty else { return false }
-        let lo = max(0, playing - 3), hi = min(sentences.count - 1, playing + 2)
-        guard lo <= hi else { return false }
-        let window = Set(WakeWord.normalize(sentences[lo...hi].joined(separator: " ")).split(separator: " ").map(String.init))
+        let window = echoWindow
+        guard !window.isEmpty else { return false }
         let tokens = WakeWord.normalize(transcript).split(separator: " ").map(String.init)
         guard !tokens.isEmpty else { return false }
         // The user addressing Sirena by name, when the text being read does not contain her name, is not an echo.
@@ -214,6 +221,14 @@ public final class ReadAloud {
         let matched = tokens.filter { window.contains($0) }.count
         if tokens.count <= 2 { return matched == tokens.count }
         return Double(matched) / Double(tokens.count) >= 0.6
+    }
+
+    /// What is left of a transcript once Sirena's own words are taken out: "stop" said over her reading, or
+    /// "Sirena, switch to Notes" mixed with the sentence being read.
+    public func leftover(of transcript: String) -> String { ReadAloud.leftover(of: transcript, window: echoWindow) }
+
+    static func leftover(of transcript: String, window: Set<String>) -> String {
+        WakeWord.normalize(transcript).split(separator: " ").map(String.init).filter { !window.contains($0) }.joined(separator: " ")
     }
 
     // MARK: - Helpers

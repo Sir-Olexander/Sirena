@@ -448,6 +448,28 @@ Run these after every build of `sirena-fixes-speed`.
 | R9 | A name-less command that cannot run says so instead of keeping "Switching to …" in the pill | |
 | R10 | The screenshot fallback stays within its step and time limits and says when it could not act (19.4) | |
 
+Added after round 1 (see `docs/human-tests-round1-analysis.md`):
+
+| ID | Check | Result |
+|---|---|---|
+| R11 | "Sirena, what time is it" / "what's the date" answer in the pill at once; no model, no screenshot (3.10) | |
+| R12 | "Sirena, switch to Zorbulator" says it cannot find it within 3 s; the screenshot agent never starts (4.9) | |
+| R13 | [Safari front] "Sirena, open Gmail" opens mail.google.com in Safari, not the Gmail web-app shortcut; "open the Gmail app" opens the shortcut (6.2) | |
+| R14 | Full-screen window, "Sirena, move this window to the other screen": one command, window ends up full screen on the other screen (15.2) | |
+| R15 | On a page with a cookie dialog: "Sirena, click consent" / "click accept all" clicks it (6.6) | |
+| R16 | "Sirena, volume max" → 100 %; "volume to 30 percent"; "mute" then "unmute" (7.7) | |
+| R17 | WhatsApp Web, chat open: "Sirena, copy the last message" copies the newest message, not the encryption banner (13.5) | |
+| R18 | "Sirena, undo" after a tab switch or an app switch works; a misheard "Ando" works too (18.1–18.3) | |
+| R19 | Two screens: "Sirena, show numbers" badges the front window and the topmost window on the other screen; "show numbers on the other screen" (9.6) | |
+| R20 | In Notes with nothing focused (click the window background): "Sirena, type hello" says no text field is focused and types nothing; with the cursor in the note it types (10.1) | |
+| R21 | "Sirena, insert my passport number" (no such snippet) says there is no snippet and types nothing; "insert emoji" opens the emoji picker (16.4) | |
+| R22 | Reading aloud on speakers: "stop" said over her voice stops; "Sirena, switch to Notes" said over her voice runs (14.4, 14.7) | |
+| R23 | Say an unknown word in three commands within two minutes ("type kinogo" ×3): the pill suggests "learn the word kinogo"; "Sirena, learn the word kinogo" adds it (22.5) | |
+| R24 | VS Code with the Markdown preview open: "Sirena, show numbers" badges the editor pane first, then the preview; saying it again within 4 s keeps the badges | |
+| R25 | "Sirena, scroll down in the sidebar" moves the sidebar, not the page; "scroll down here" scrolls under the pointer (7.3) | |
+| R26 | Shortcut "call Barokas" twice in a row: the second run replaces the old name in the search field and finds the main WhatsApp window even if the call popup is still open (17.1) | |
+| R27 | Music on the speakers, Sirena waiting: a "hey" in the lyrics does not wake her; each history entry of the session carries an `echo` field (20.4) | |
+
 ---
 
 ## Summary

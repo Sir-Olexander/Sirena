@@ -65,8 +65,107 @@ public enum FastPathParser {
         ("play music", "play"), ("pause music", "pause"), ("resume music", "play"), ("play pause", "playpause"),
         ("volume up", "volumeup"), ("louder", "volumeup"), ("turn it up", "volumeup"), ("turn up the volume", "volumeup"), ("increase volume", "volumeup"),
         ("volume down", "volumedown"), ("quieter", "volumedown"), ("turn it down", "volumedown"), ("turn down the volume", "volumedown"), ("decrease volume", "volumedown"), ("lower the volume", "volumedown"),
-        ("mute", "mute"), ("unmute", "mute"), ("mute the sound", "mute"), ("mute the volume", "mute"),
     ]
+
+    /// "mute", "unmute", "volume max", "volume to 30 percent": the output volume set directly (muting is not a toggle,
+    /// so "unmute" never mutes).
+    static func volume(_ t: String) -> ParsedCommand? {
+        if ["mute", "mute the sound", "mute the volume", "mute the mac", "mute everything", "mute the audio", "mute sound", "mute it",
+            "silence", "sound off", "turn off the sound", "turn the sound off", "turn off the volume", "silencia", "silêncio", "silencio", "sem som", "tira o som"].contains(t) {
+            return ParsedCommand(.setVolume(level: nil, muted: true))
+        }
+        if ["unmute", "unmute the sound", "unmute the volume", "unmute the mac", "unmute it", "sound on", "turn on the sound", "turn the sound on",
+            "turn the sound back on", "turn on the volume", "põe o som", "poe o som", "liga o som"].contains(t) {
+            return ParsedCommand(.setVolume(level: nil, muted: false))
+        }
+        let v = "(?:the\\s+)?(?:volume|sound|audio|som|volume do som)"
+        if t.firstMatch("^(?:(?:set|put|turn|raise|crank)\\s+)?\(v)\\s+(?:up\\s+)?(?:to\\s+)?(?:the\\s+)?(?:max|maximum|full|top|100|100 percent|all the way up|all the way|no máximo|no maximo|máximo|maximo)$"
+                        + "|^(?:max|maximum|full|loud)\\s+volume$|^turn\\s+\(v)\\s+(?:all the way|fully|right)\\s+up$|^volume\\s+up\\s+all\\s+the\\s+way$") != nil {
+            return ParsedCommand(.setVolume(level: 100, muted: false))
+        }
+        if t.firstMatch("^(?:(?:set|put|turn|lower)\\s+)?\(v)\\s+(?:down\\s+)?(?:to\\s+)?(?:the\\s+)?(?:min|minimum|zero|0|lowest|all the way down|no mínimo|no minimo|mínimo|minimo)$"
+                        + "|^(?:min|minimum)\\s+volume$|^turn\\s+\(v)\\s+(?:all the way|fully|right)\\s+down$|^volume\\s+down\\s+all\\s+the\\s+way$") != nil {
+            return ParsedCommand(.setVolume(level: 0, muted: nil))
+        }
+        if let m = t.firstMatch("^(?:(?:set|put|turn|change)\\s+)?\(v)\\s+(?:to|at|on)?\\s*(?:the\\s+)?(\\S+?(?:\\s+\\S+?)?)\\s*(?:percent|per cent|%)?$"),
+           let n = Numbers.parse(m[1].replacingOccurrences(of: "\\s*(?:percent|per cent|%)$", with: "", options: .regularExpression)), (0...100).contains(n) {
+            return ParsedCommand(.setVolume(level: n, muted: false))
+        }
+        return nil
+    }
+
+    static let timePhrases: Set<String> = ["what time is it", "what time is it now", "what's the time", "what is the time", "whats the time", "what time it is",
+                                           "tell me the time", "time", "the time", "current time", "what's the time now", "what is the time now", "time now",
+                                           "que horas são", "que horas sao", "horas", "que horas", "diz me as horas", "diz as horas"]
+    static let datePhrases: Set<String> = ["what's the date", "what is the date", "whats the date", "what's the date today", "what is the date today",
+                                           "what's today's date", "what is today's date", "whats today's date", "what day is it", "what day is it today",
+                                           "what date is it", "which day is it", "today's date", "the date", "date", "what's today", "what day is today",
+                                           "what is today", "que dia é hoje", "que dia e hoje", "qual é a data", "qual e a data", "qual é a data de hoje",
+                                           "qual e a data de hoje", "que dia é", "que dia e", "que dia é hoje?"]
+
+    /// "what time is it", "what's the date": answered on the spot, never through the model or a screenshot.
+    static func timeQuestion(_ t: String, now: Date = Date()) -> ParsedCommand? {
+        let isTime = timePhrases.contains(t), isDate = datePhrases.contains(t)
+        let both = t.firstMatch("^(?:what(?:'s| is|s)? the )?(?:time and date|date and time)(?: today| now)?$") != nil
+        guard isTime || isDate || both else { return nil }
+        let f = DateFormatter()
+        f.locale = Locale.current
+        f.timeStyle = .short; f.dateStyle = .none
+        let time = f.string(from: now)
+        f.timeStyle = .none; f.dateStyle = .full
+        let date = f.string(from: now)
+        if both { return ParsedCommand(.say("It's \(time), \(date)"), label: "Time and date") }
+        return isTime ? ParsedCommand(.say("It's \(time)"), label: "Time") : ParsedCommand(.say("Today is \(date)"), label: "Date")
+    }
+
+    /// "learn the word kinogo", "add kinogo to the vocabulary", "remember the word Barokas": a custom vocabulary word.
+    static func vocabularyCommand(_ raw: String, _ t: String) -> ParsedCommand? {
+        let cleaned = stripLeadIns(raw).trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ".!?")))
+        let patterns = [
+            "^(?:learn|remember|memori[sz]e|add|save)\\s+(?:the\\s+|this\\s+|a\\s+new\\s+|the\\s+new\\s+)?(?:word|name|term)\\s+(.+)$",
+            "^add\\s+(.+?)\\s+to\\s+(?:the|your|my)\\s+(?:custom\\s+)?(?:vocabulary|vocab|dictionary|words)$",
+            "^(?:aprende|adiciona|guarda|memoriza|lembra te d|lembra te da)\\s+(?:a\\s+)?(?:palavra|nome)\\s+(.+)$",
+            "^adiciona\\s+(.+?)\\s+ao\\s+(?:teu\\s+|meu\\s+)?vocabul[aá]rio$",
+        ]
+        for p in patterns {
+            guard let m = cleaned.firstMatch(p) else { continue }
+            var word = m[1].trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"“”'‘’.,")))
+            word = word.replacingOccurrences(of: "\\s+dot\\s+", with: ".", options: [.regularExpression, .caseInsensitive])
+            guard !word.isEmpty, word.count <= ASRKeywords.maxLength, word.split(separator: " ").count <= 4 else { return nil }
+            return ParsedCommand(.addVocabulary(word))
+        }
+        return nil
+    }
+
+    /// "scroll down in the sidebar", "scroll the chat up", "scroll down here" (under the pointer): a scrollable part of the
+    /// window rather than the page. The page itself stays with `scrolling`.
+    static func scrollIn(_ t: String) -> ParsedCommand? {
+        func amount(_ s: String) -> ScrollAmount {
+            if s.contains("lot") || s.contains("bunch") { return .large }
+            if s.contains("bit") || s.contains("little") || s.contains("slightly") { return .small }
+            if s.contains("page") { return .page }
+            return .medium
+        }
+        let dirs = "(up|down|left|right)"
+        let amt = "(a\\s+lot|a\\s+bit|a\\s+little(?:\\s+bit)?|a\\s+page|a\\s+bunch|slightly)"
+        let page: Set<String> = ["page", "the page", "this page", "screen", "the screen", "window", "the window", "web page", "site"]
+        if let m = t.firstMatch("^scroll\\s*\(dirs)?\\s*\(amt)?\\s*(?:here|right here|under the (?:mouse|cursor|pointer)|where the (?:mouse|cursor|pointer) is|at the (?:mouse|cursor|pointer)|at the mouse position)$") {
+            return ParsedCommand(.scrollElement("here", ScrollDirection(rawValue: m[1]) ?? .down, amount(m[2])))
+        }
+        if let m = t.firstMatch("^scroll\\s*\(dirs)?\\s*\(amt)?\\s*(?:in|on|inside|within|through|at)\\s+(?:the\\s+)?(.+?)(?:\\s+\(amt))?$") {
+            let target = m[3].trimmingCharacters(in: .whitespaces)
+            let dir = ScrollDirection(rawValue: m[1]) ?? .down
+            let a = amount(m[2].isEmpty ? m[4] : m[2])
+            if page.contains(target) { return ParsedCommand(.scroll(dir, a)) }
+            return ParsedCommand(.scrollElement(target, dir, a))
+        }
+        if let m = t.firstMatch("^scroll\\s+(?:the\\s+)?(.+?)\\s+\(dirs)(?:\\s+\(amt))?$"), !["page", "all the way", "a bit", "a little"].contains(m[1]) {
+            let dir = ScrollDirection(rawValue: m[2]) ?? .down
+            if page.contains(m[1]) { return ParsedCommand(.scroll(dir, amount(m[3]))) }
+            return ParsedCommand(.scrollElement(m[1], dir, amount(m[3])))
+        }
+        return nil
+    }
 
     static let chatApps: Set<String> = ["slack", "messages", "claude", "discord", "whatsapp", "telegram", "chatgpt", "teams", "microsoft teams", "signal", "messenger", "zoom", "gemini", "chat gpt"]
 
@@ -107,6 +206,8 @@ public enum FastPathParser {
 
     /// Lowercased command without punctuation, fillers, polite lead-ins ("please", "can you", "okay"…) and stutters.
     public static func normalize(_ raw: String) -> String {
+        // "And do" is how the recognizer hears "undo"; the filler rule would strip the "and".
+        if ["and do", "and do that", "and do it", "ando"].contains(WakeWord.normalize(raw)) { return "undo" }
         var t = WakeWord.normalize(stripLeadingFillers(raw))
         t = collapseLeadingRepeat(t)
         t = WakeWord.normalize(stripLeadingFillers(t))
@@ -154,7 +255,7 @@ public enum FastPathParser {
     static func isSafeWithoutName(_ a: Action) -> Bool {
         switch a {
         case .scroll, .scrollTo, .switchTab, .newTab, .reopenTab, .goBack, .goForward, .switchTo, .activateApp, .open, .focusScreen,
-             .moveWindowToScreen, .mediaKey, .zoomWindow, .clickNumber, .showNumbers, .hideNumbers, .pause, .readingControl,
+             .moveWindowToScreen, .mediaKey, .setVolume, .scrollElement, .zoomWindow, .clickNumber, .showNumbers, .hideNumbers, .pause, .readingControl,
              .copyText, .selectText, .repeatLast, .openResult:
             return true
         case .inApp(_, let inner): return isSafeWithoutName(inner)
@@ -206,6 +307,8 @@ public enum FastPathParser {
     }
 
     static func parseSingle(_ text: String, _ t: String, context: Context) -> ParsedCommand? {
+        if let c = timeQuestion(t) { return c }
+        if let c = vocabularyCommand(text, t) { return c }
         if let c = textQueryCommand(t) { return c }
         if let c = resultCommand(t) { return c }
         if let c = appQualifiedTab(t) { return c }
@@ -216,8 +319,10 @@ public enum FastPathParser {
         if let c = screenCommand(t) { return c }
         if let c = numbersClick(t, context: context) { return c }
         if let c = shortcut(t) { return c }
+        if let c = volume(t) { return c }
         if let c = media(t) { return c }
         if let c = tabs(t) { return c }
+        if let c = scrollIn(t) { return c }
         if let c = scrolling(t) { return c }
         if let c = navigation(t, context: context) { return c }
         if let c = focusCommand(t) { return c }
@@ -241,10 +346,14 @@ public enum FastPathParser {
              "desliga", "desligar", "desliga te", "deixa de ouvir", "para de ouvir":
             return ParsedCommand(.turnOff, label: "Off")
         case "start dictating", "start dictation", "dictation mode", "take dictation", "begin dictation", "begin dictating", "dictate", "start typing", "dictation", "let me dictate", "start dictation mode", "enter dictation mode",
-             "ditar", "ditado", "modo ditado", "começa a ditar", "comeca a ditar", "vou ditar":
+             "start the dictation", "start dictate", "start dictating mode", "dictation on", "dictate mode", "start the dictating", "start to dictate",
+             // Heard by the recognizer for "start dictating" / "dictate" (2026-11-03 session).
+             "start dating", "start the dating", "start detecting", "start the dictating mode", "dictator", "dictate it",
+             "ditar", "ditado", "modo ditado", "começa a ditar", "comeca a ditar", "vou ditar", "começa o ditado", "comeca o ditado":
             return ParsedCommand(.startDictation, label: "Dictating — say “Sirena, stop” to finish")
         case "stop dictating", "stop dictation", "end dictation", "done dictating", "stop typing", "exit dictation", "finish dictation", "end dictating", "dictation off", "leave dictation mode", "exit dictation mode",
-             "para de ditar", "parar ditado", "acaba o ditado", "fim do ditado":
+             "stop the dictation", "stop dating", "stop the dating", "stop dictate", "end the dictation",
+             "para de ditar", "parar ditado", "acaba o ditado", "fim do ditado", "para o ditado":
             return ParsedCommand(.stopDictation, label: "Dictation off")
         case "stop", "stop it", "that's enough", "done", "i'm done", "finished", "that's it", "enough",
              "para", "parar", "pára", "chega", "já está", "ja esta", "acabou", "para para":
@@ -255,7 +364,10 @@ public enum FastPathParser {
         case "hide numbers", "hide the numbers", "clear numbers", "remove numbers", "numbers off", "hide labels", "clear the numbers", "remove the numbers", "hide number",
              "esconde os números", "esconde os numeros", "tira os números", "tira os numeros":
             return ParsedCommand(.hideNumbers, label: "Numbers hidden")
-        case "undo", "undo that", "undo the last action", "undo last action", "take that back", "revert", "undo it", "desfaz", "desfazer", "anula", "anula isso":
+        case "undo", "undo that", "undo the last action", "undo last action", "take that back", "revert", "undo it", "undo this", "undo the last thing",
+             // Heard by the recognizer for "undo" (2026-11-03 session: "Ando", "And do").
+             "ando", "and do", "and do that", "and do it", "undue", "on do", "on do that", "undo undo",
+             "desfaz", "desfazer", "anula", "anula isso", "desfaz isso", "anular":
             return ParsedCommand(.undo, label: "Undo")
         case "cancel", "never mind", "nevermind", "cancel that", "no", "abort", "leave it", "ignore that", "cancela", "cancelar", "esquece", "deixa", "deixa estar", "não", "nao":
             return ParsedCommand(.cancel, label: "Cancelled")
@@ -294,25 +406,71 @@ public enum FastPathParser {
         case "help", "what can you do", "what can i say", "show help", "commands":
             return ParsedCommand(.say("Try: switch to Chrome · next tab · scroll down · click Send · type hello · start dictating · show numbers · wait"), label: "Help")
         default:
-            return nil
+            return fuzzyControl(t, context: context)
+        }
+    }
+
+    /// Controls the recognizer often garbles ("start dictating" → "start detecting", "show numbers" → "show numbs"):
+    /// the first word must match and the rest be close. Only Sirena's modes, never anything that acts on the screen.
+    static let fuzzyControls: [(String, Action)] = [
+        ("start dictating", .startDictation), ("start dictation", .startDictation), ("begin dictating", .startDictation),
+        ("stop dictating", .stopDictation), ("stop dictation", .stopDictation),
+        ("show numbers", .showNumbers), ("show the numbers", .showNumbers), ("hide numbers", .hideNumbers), ("hide the numbers", .hideNumbers),
+        ("stop listening", .turnOff),
+    ]
+
+    static func fuzzyControl(_ t: String, context: Context) -> ParsedCommand? {
+        let words = t.split(separator: " ").map(String.init)
+        guard words.count >= 2, words.count <= 4, t.count >= 8 else { return nil }
+        var best: (Action, Double)?
+        for (phrase, action) in fuzzyControls {
+            guard phrase.hasPrefix(words[0] + " ") else { continue }
+            let s = Fuzzy.similarity(phrase, t)
+            if s >= 0.8, best == nil || s > best!.1 { best = (action, s) }
+        }
+        guard let (action, _) = best else { return nil }
+        switch action {
+        case .startDictation: return ParsedCommand(.startDictation, label: "Dictating — say “Sirena, stop” to finish")
+        case .stopDictation: return ParsedCommand(.stopDictation, label: "Dictation off")
+        case .showNumbers: return ParsedCommand(.showNumbers, label: "Say “click <number>”")
+        case .hideNumbers: return ParsedCommand(.hideNumbers, label: "Numbers hidden")
+        case .turnOff: return ParsedCommand(.turnOff, label: "Off")
+        default: return nil
         }
     }
 
     static func typeCommand(_ raw: String, _ t: String) -> ParsedCommand? {
+        // "insert emoji", "type the key enter": a shortcut, not text.
+        if shortcutPhrases.contains(where: { $0.0 == t }) || mediaPhrases.contains(where: { $0.0 == t }) { return nil }
         // "type hello world", "write ...", "insert ...", "enter the text ..."
-        let pattern = "^\\s*(?:please\\s+)?(?:type|write|insert|input|enter the text|type in|type out|write down|say)\\b[\\s:,]*(.+)$"
+        let pattern = "^\\s*(?:please\\s+)?(type|write|insert|input|enter the text|type in|type out|write down|say)\\b[\\s:,]*(.+)$"
         guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) else { return nil }
         let cleaned = stripLeadIns(raw)
         let ns = cleaned as NSString
         guard let m = re.firstMatch(in: cleaned, range: NSRange(location: 0, length: ns.length)) else { return nil }
-        var body = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+        let verb = ns.substring(with: m.range(at: 1)).lowercased()
+        var body = ns.substring(with: m.range(at: 2)).trimmingCharacters(in: .whitespacesAndNewlines)
         // "type the following: ..." / "type the words ..."
+        let explicit = body.firstMatch("^(?:the following|the words?|the text|this|the phrase|the sentence)[\\s:,]+") != nil
         body = body.replacingOccurrences(of: "^(?:the following|the words?|the text|this|the phrase|the sentence)[\\s:,]+", with: "", options: [.regularExpression, .caseInsensitive])
         // Strip wrapping quotes
-        if body.count >= 2, let f = body.first, let l = body.last, "\"“”'‘’".contains(f), "\"“”'‘’".contains(l) { body = String(body.dropFirst().dropLast()) }
+        var quoted = false
+        if body.count >= 2, let f = body.first, let l = body.last, "\"“”'‘’".contains(f), "\"“”'‘’".contains(l) { body = String(body.dropFirst().dropLast()); quoted = true }
         // Spoken "type" that is really a note like "type of file" is not a command.
         guard !body.isEmpty, !t.hasPrefix("type of ") else { return nil }
-        // Spoken trailing period from the recognizer
+        // "write an email to Carl", "type a message": composing, not the words "an email" (left to the model).
+        if !quoted, !explicit, WakeWord.normalize(body).firstMatch("^(?:a|an|the|my|your|another|a new|a quick|a short)\\s+(?:e ?mail|message|note|reply|text|letter|essay|post|tweet|comment|summary|answer|response)(?:\\s+(?:to|for|about|saying|in)\\b.*)?$") != nil {
+            return nil
+        }
+        // "insert my passport number" with no such snippet: say so instead of typing the words (snippets are matched before this).
+        if verb == "insert", !quoted, !explicit {
+            return ParsedCommand(.say("No snippet called “\(body)” — add it under Notes & snippets, or say “type \(body)”"), label: "No snippet “\(body.prefix(30))”")
+        }
+        // "type kinogo dot org": a spoken address.
+        if body.firstMatch("^[a-z0-9-]+(?:\\s*dot\\s*[a-z0-9-]+)+(?:\\s*slash\\s*\\S+)*$") != nil {
+            body = body.lowercased().replacingOccurrences(of: "\\s*dot\\s*", with: ".", options: .regularExpression)
+                .replacingOccurrences(of: "\\s*slash\\s*", with: "/", options: .regularExpression)
+        }
         return ParsedCommand(.typeText(body), label: "Typing “\(body.prefix(40))\(body.count > 40 ? "…" : "")”")
     }
 
@@ -630,6 +788,13 @@ public enum FastPathParser {
             case "third", "the third": return .index(3)
             default: return nil
             }
+        }
+        // "show numbers on the other monitor", "show numbers on screen 2": focus that screen, then the badges.
+        if let m = t.firstMatch("^(?:show|display)\\s+(?:me\\s+)?(?:the\\s+)?numbers\\s+(?:on|in|at)\\s+(.+?)\\s+\(screenWord)$"), let tg = target(m[1]) {
+            return ParsedCommand([.focusScreen(tg), .pause(ms: 300), .showNumbers], label: "Numbers on \(tg.spoken)")
+        }
+        if let m = t.firstMatch("^(?:show|display)\\s+(?:me\\s+)?(?:the\\s+)?numbers\\s+(?:on|in|at)\\s+\(screenWord)\\s+(?:number\\s+)?(\\S+)$"), let n = Numbers.parse(m[1]) {
+            return ParsedCommand([.focusScreen(.index(n)), .pause(ms: 300), .showNumbers], label: "Numbers on screen \(n)")
         }
         // "move this window to the other screen", "send it to screen 2", "put the window on the left monitor"
         if let m = t.firstMatch("^(?:move|send|put|throw|drag|take)\\s+(?:this|the|that|it|my)?\\s*(?:window|app|application)?\\s*(?:over\\s+)?(?:to|on|onto|into)\\s+(.+?)\\s+\(screenWord)$") {

@@ -37,27 +37,36 @@ public final class ComputerUseAgent {
         public init(text: String, actions: Int, stopped: String? = nil) { self.text = text; self.actions = actions; self.stopped = stopped }
     }
 
-    public func run(goal: String, context: String, maxSteps: Int = 6, timeLimit: TimeInterval = 30) async throws -> Outcome {
+    /// - Parameter lookOnly: a question ("what's on my screen?"): one screenshot and a one-line answer; any action the
+    ///   model asks for is refused instead of performed.
+    public func run(goal: String, context: String, maxSteps: Int = 6, timeLimit: TimeInterval = 30, lookOnly: Bool = false) async throws -> Outcome {
         guard let client = clientProvider() else { throw APIError.missingKey }
         guard CGPreflightScreenCaptureAccess() else { throw ExecutionError.failed("Screen Recording permission is needed for this") }
         onStatus?("Looking at the screen…")
         let started = Date()
         var performed = 0
         var shot = try await screenshot()
+        let instructions = lookOnly
+            ? """
+              You are looking at this Mac's screen for a hands-free user who asked a question. Question: \(goal)
+              Context: \(context)
+              Answer the question from the screenshot in one or two short sentences. Do not click, type, scroll or take any other action.
+              """
+            : """
+              You are controlling this Mac for a hands-free user. Goal: \(goal)
+              Context: \(context)
+              Do only what the goal needs, with as few actions as possible. Finish with a one-line message when done.
+              Never send a message, submit a form, delete or buy anything: stop and describe what remains before such an action.
+              """
         var input: [JSON] = [
             .object(["role": "user", "content": .array([
-                .object(["type": "input_text", "text": .string("""
-                You are controlling this Mac for a hands-free user. Goal: \(goal)
-                Context: \(context)
-                Do only what the goal needs, with as few actions as possible. Finish with a one-line message when done.
-                Never send a message, submit a form, delete or buy anything: stop and describe what remains before such an action.
-                """)]),
+                .object(["type": "input_text", "text": .string(instructions)]),
                 .object(["type": "input_image", "image_url": .string("data:image/png;base64,\(shot.png.base64EncodedString())")]),
             ])]),
         ]
         var typedSinceLastCheck = false
         var lastTyped: String?
-        for step in 1...maxSteps {
+        for step in 1...(lookOnly ? 2 : maxSteps) {
             try Task.checkCancellation()
             let elapsed = Date().timeIntervalSince(started)
             if elapsed > timeLimit { return Outcome(text: "Stopped after \(Int(timeLimit)) s", actions: performed, stopped: "time limit") }
@@ -90,6 +99,11 @@ public final class ComputerUseAgent {
             // Safety checks
             var acknowledged: [JSON] = []
             let actions = call["actions"]?.arrayValue ?? (call["action"].map { [$0] } ?? [])
+            if lookOnly, actions.contains(where: { !["screenshot", "wait"].contains($0["type"]?.stringValue ?? "") }) {
+                // Asked a question, the model wants to act: it only gets to describe.
+                let text = ComputerUseAgent.assistantText(output) ?? "I can only describe the screen for a question — say what to do, e.g. “click Send”"
+                return Outcome(text: text, actions: 0)
+            }
             if let checks = call["pending_safety_checks"]?.arrayValue, !checks.isEmpty {
                 let warning = checks.compactMap { $0["message"]?.stringValue }.joined(separator: " ")
                 if ComputerUseAgent.isHarmless(actions, shot: shot, typedBefore: typedSinceLastCheck) {

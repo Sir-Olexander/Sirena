@@ -43,6 +43,8 @@ public struct HistoryEntry: Codable, Identifiable {
     public var failed: Bool?
     public var wakeMethod: String?
     public var shortcutId: String?
+    /// What the echo gate was doing when this was heard (only while the Mac plays sound), e.g. "gating, delay 30 ms, 412 chunks silenced".
+    public var echo: String?
 
     public init(utterance: String, route: String, layer: String? = nil, action: String? = nil, result: String? = nil, latency: LatencyReport? = nil,
                 command: String? = nil, actions: [Action]? = nil, failed: Bool? = nil, wakeMethod: String? = nil, shortcutId: String? = nil) {
@@ -51,7 +53,14 @@ public struct HistoryEntry: Codable, Identifiable {
         self.action = action; self.result = result; self.latency = latency
         self.sessionId = HistoryLog.currentSessionId
         self.command = command; self.actions = actions; self.failed = failed; self.wakeMethod = wakeMethod; self.shortcutId = shortcutId
+        self.echo = HistoryLog.echoStatusProvider?()
     }
+}
+
+extension HistoryLog {
+    /// The echo gate's state while other sound plays (nil otherwise); stamped on every entry so a round of tests shows
+    /// whether music was being silenced when something went wrong.
+    public static var echoStatusProvider: (() -> String?)?
 }
 
 /// Append-only JSONL log in ~/Library/Application Support/Sirena/history.jsonl

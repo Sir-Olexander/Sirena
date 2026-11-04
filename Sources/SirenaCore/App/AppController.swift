@@ -278,6 +278,7 @@ public final class AppController {
             else { NSWorkspace.shared.open(url.deletingLastPathComponent()) }
         }
         devPanel.onOpenLog = { [weak self] in self?.menuBar.onSessionLog?() }
+        devPanel.echoStatus = { [weak self] in self?.listening.echoStatus ?? "" }
         menuBar.onDevModeToggled = { [weak self] in self?.applySettings() }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
             guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,

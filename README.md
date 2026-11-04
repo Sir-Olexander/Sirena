@@ -92,8 +92,13 @@ mic ──► Muse Voice Transcribe (ENDPOINTING) ──► utterance router ─
 
 While the screenshot fallback works, other speech does not interrupt it: only "cancel", "stop" or the answer to its
 confirmation. Its confirmations name the item it will act on ("Click “Mark” (the first item in the “Chats” list) in
-WhatsApp?"), never a window or page title. It runs at most 6 steps and 30 seconds, only for requests that say what to
-do ("this one" or "more" are not enough), asks nothing for harmless steps, and says so when it could not act.
+WhatsApp?"), never a window or page title. It runs at most 6 steps and 30 seconds, only for requests that name what to
+act on ("click consent" yes, "this one" or "click it" no), asks nothing for harmless steps, and says so when it could
+not act. A question ("what's on my screen?") gets one look and a one-line answer, never clicks; an app, tab or site
+that does not exist ("switch to Zorbulator") stops at "I couldn't find it" instead of a screenshot hunt. "Click X" and
+"focus X" search the whole window for the label (and the app's other windows) when the first snapshot missed it,
+e.g. a cookie dialog at the end of a long page. Typing refuses with a reason when no text field has the focus, and a
+command the recognizer garbled is never typed into a field ("start dating" is "start dictating").
 
 Results pages: "first link", "the second one", "open the third result" open that result of the page in front
 without the model (navigation, ads and "skip to content" links are left out). "Close all tabs" always closes every
@@ -181,12 +186,16 @@ Click the gray dot (or the menu bar icon, or press ⌃⌥⌘S). Then:
 | "Sirena, Chrome tab 2" · "switch to the second tab in VS Code" | tabs of a named app |
 | "Sirena, copy the first paragraph" · "copy the paragraph about …" · "copy the paragraph that starts with …" · "copy the title" · "copy the second sentence" · "copy the last message" | copies it (and selects it on screen); "select …" / "read …" work the same way |
 | "Sirena, command tab" · "alt tab" · "control c" · "alt F4" | shortcuts, Windows wording mapped to the Mac |
-| "Sirena, scroll down" · "scroll up a bit" · "page down" · "scroll to the top" | scrolling |
+| "Sirena, scroll down" · "scroll up a bit" · "page down" · "scroll to the top" | scrolling (the page) |
+| "Sirena, scroll down in the sidebar" · "scroll the chat up" · "scroll down here" | scrolls a part of the window: the sidebar, the list, the chat above the message box, or under the pointer |
+| "Sirena, volume max" · "volume to 30 percent" · "mute" · "unmute" | output volume (volume up / down still step) |
+| "Sirena, what time is it" · "what's the date" | answered on the spot, no model |
+| "Sirena, learn the word kinogo" · "add Barokas to the vocabulary" | adds a custom vocabulary word for the recognizer; after hearing the same unknown word three times she suggests it |
 | "Sirena, click Send" · "click the Reply button" · "focus the search field" | by accessibility label |
 | "Sirena, send a message to Claude saying …" | switches, focuses the composer, types, asks before Enter |
 | "Sirena, type hello world" | inserts the text |
 | "Sirena, start dictating" … "Sirena, stop" | dictation mode |
-| "Sirena, show numbers" … "click 4" · "hide numbers" | numbers mode |
+| "Sirena, show numbers" … "click 4" · "hide numbers" · "show numbers on the other screen" | numbers mode: the front window (the pane with the keyboard focus first) and the topmost window on every other screen |
 | "Sirena, undo" · "Sirena, cancel" | undo or stop the last action |
 | "Sirena, wait" … "Hey Sirena" (or "Hey Sirena, next tab") | pause and wake (and run the command) |
 | "Sirena, move this window to the other screen" · "switch to the left monitor" | several screens |

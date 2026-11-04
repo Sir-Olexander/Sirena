@@ -109,16 +109,31 @@ public enum Screens {
         }
     }
 
-    /// Moves the front window to another screen, keeping its relative position and size.
+    /// Moves the front window to another screen, keeping its relative position and size. A full-screen window leaves
+    /// full screen, moves, and goes full screen again on the other screen.
     public static func moveFrontWindow(to target: ScreenTarget) throws -> String {
         guard ordered().count > 1 else { throw ExecutionError.failed("Only one screen is connected") }
-        guard let app = RunningApps.frontmost(), let win = AX.frontWindow(pid: app.pid), let frame = win.frame else {
+        guard let app = RunningApps.frontmost(), let win = AX.frontWindow(pid: app.pid), var frame = win.frame else {
             throw ExecutionError.failed("No front window to move")
         }
-        if win.bool("AXFullScreen") == true { throw ExecutionError.failed("Leave full screen first (say “exit full screen”)") }
+        var wasFullScreen = false
+        if win.bool("AXFullScreen") == true {
+            // Where the window will be judged to be: its full-screen space is on the screen it fills.
+            let current = screen(containingQuartz: CGPoint(x: frame.midX, y: frame.midY))
+            guard let dest = resolve(target, from: current) else { throw ExecutionError.failed("No \(target.spoken)") }
+            if dest == current { return "Already on \(name(of: dest))" }
+            guard win.set("AXFullScreen", kCFBooleanFalse) else { throw ExecutionError.failed("Leave full screen first (say “exit full screen”)") }
+            // The exit animation takes about a second; wait until the window reports a normal frame.
+            for _ in 0..<25 {
+                usleep(100_000)
+                if win.bool("AXFullScreen") == false, let f = win.frame, f.height < (current?.frame.height ?? f.height + 1) { frame = f; break }
+            }
+            frame = win.frame ?? frame
+            wasFullScreen = true
+        }
         let current = screen(containingQuartz: CGPoint(x: frame.midX, y: frame.midY))
         guard let dest = resolve(target, from: current) else { throw ExecutionError.failed("No \(target.spoken)") }
-        if dest == current { return "Already on \(name(of: dest))" }
+        if dest == current, !wasFullScreen { return "Already on \(name(of: dest))" }
         let from = quartz(onMain { (current ?? dest).visibleFrame })
         let to = quartz(onMain { dest.visibleFrame })
         let relX = (frame.minX - from.minX) / max(from.width, 1)
@@ -135,7 +150,32 @@ public enum Screens {
         setFrame()
         usleep(80_000)
         setFrame()   // some apps clamp the size against the old screen on the first pass
+        if wasFullScreen {
+            usleep(300_000)
+            win.set("AXFullScreen", kCFBooleanTrue)
+            return "Moved \(app.name) to \(name(of: dest)), full screen again"
+        }
         return "Moved \(app.name) to \(name(of: dest))"
+    }
+
+    /// The topmost normal window on a screen (window-server order), with its owner, or nil.
+    public static func topWindow(on dest: NSScreen) -> (app: AppInfo, window: AXElement?, frame: CGRect)? {
+        let destQ = quartz(onMain { dest.frame })
+        let own = getpid()
+        let list = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
+        for info in list {
+            guard (info[kCGWindowLayer as String] as? Int) == 0,
+                  let pid = info[kCGWindowOwnerPID as String] as? pid_t, pid != own,
+                  let b = info[kCGWindowBounds as String] as? [String: CGFloat],
+                  let x = b["X"], let y = b["Y"], let w = b["Width"], let h = b["Height"], w > 120, h > 80 else { continue }
+            let rect = CGRect(x: x, y: y, width: w, height: h)
+            guard destQ.contains(CGPoint(x: rect.midX, y: rect.midY)),
+                  let app = NSRunningApplication(processIdentifier: pid), let appName = app.localizedName else { continue }
+            let ax = AXElement.application(pid: pid)
+            let win = ax.windows.first(where: { ($0.frame.map { abs($0.minX - rect.minX) < 4 && abs($0.minY - rect.minY) < 4 }) ?? false })
+            return (AppInfo(name: appName, bundleId: app.bundleIdentifier ?? "", pid: pid, app: app), win, rect)
+        }
+        return nil
     }
 
     /// Focuses the topmost window on another screen and moves the pointer there.

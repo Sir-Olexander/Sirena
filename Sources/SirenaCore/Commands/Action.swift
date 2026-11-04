@@ -71,6 +71,10 @@ public indirect enum Action: Equatable, Codable {
     case wait, turnOff, startDictation, stopDictation
     case undo, cancel, newLine, deleteLastChunk
     case mediaKey(String)       // play, next, previous, volumeup, volumedown, mute
+    /// "volume max", "volume to 30 percent", "mute", "unmute": the output volume as a level (0–100) and/or muted.
+    case setVolume(level: Int?, muted: Bool?)
+    /// "scroll down in the sidebar", "scroll down here": scroll the scrollable part under a named element (or the pointer).
+    case scrollElement(String, ScrollDirection, ScrollAmount)
     case zoomWindow, minimizeWindow
     /// Ask before running the inner actions.
     case confirmThen(message: String, actions: [Action])
@@ -103,13 +107,15 @@ public indirect enum Action: Equatable, Codable {
     case repeatLast
     /// "open the first result", "the second one": the Nth link of the page's main content (-1 = last).
     case openResult(Int)
+    /// "Sirena, learn the word kinogo": add a word to the custom vocabulary sent to the recognizer.
+    case addVocabulary(String)
 
     /// Control actions are handled by the listening controller, not the executor.
     public var isControl: Bool {
         switch self {
         case .wait, .turnOff, .startDictation, .stopDictation, .showNumbers, .hideNumbers, .undo, .cancel, .newLine, .deleteLastChunk, .say,
              .readSelection, .readArticle, .readPage, .readingControl, .forgetLearnedShortcut,
-             .openNotesWindow, .openShortcutsWindow, .openHistoryWindow, .readText, .repeatLast:
+             .openNotesWindow, .openShortcutsWindow, .openHistoryWindow, .readText, .repeatLast, .addVocabulary:
             return true
         default:
             return false
@@ -184,6 +190,10 @@ public indirect enum Action: Equatable, Codable {
         case .newLine: return "New line"
         case .deleteLastChunk: return "Deleting that"
         case .mediaKey(let k): return "Media: \(k)"
+        case .setVolume(let level, let muted):
+            if let level { return "Volume \(level)%" }
+            return muted == true ? "Muted" : "Unmuted"
+        case .scrollElement(let target, let d, _): return "Scrolling \(d.rawValue) in \(target == "here" ? "place" : "the \(target)")"
         case .zoomWindow: return "Zooming window"
         case .minimizeWindow: return "Minimizing"
         case .confirmThen(let m, _): return m
@@ -212,6 +222,7 @@ public indirect enum Action: Equatable, Codable {
         case .readText(let q): return "Reading \(q.spoken)"
         case .repeatLast: return "Again"
         case .openResult(let n): return n == -1 ? "Opening the last result" : "Opening result \(n)"
+        case .addVocabulary(let w): return "Learning the word “\(w)”"
         }
     }
 }

@@ -5,6 +5,8 @@ import SwiftUI
 public final class DevPanelController {
     private var panel: NSPanel?
     public var onOpenLog: (() -> Void)?
+    /// What the echo gate is doing (music playing on the Mac), refreshed every second.
+    public var echoStatus: () -> String = { "" }
 
     public init() {}
 
@@ -20,7 +22,8 @@ public final class DevPanelController {
             p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             p.isMovableByWindowBackground = true
             p.isReleasedWhenClosed = false
-            p.contentView = FirstClickHostingView(rootView: DevPanelView(stats: SessionStats.shared, openLog: { [weak self] in self?.onOpenLog?() }))
+            p.contentView = FirstClickHostingView(rootView: DevPanelView(stats: SessionStats.shared, openLog: { [weak self] in self?.onOpenLog?() },
+                                                                         echoStatus: { [weak self] in self?.echoStatus() ?? "" }))
             if let screen = NSScreen.main?.visibleFrame {
                 p.setFrameOrigin(NSPoint(x: screen.maxX - 350, y: screen.maxY - 440))
             }
@@ -36,6 +39,7 @@ public final class DevPanelController {
 struct DevPanelView: View {
     @ObservedObject var stats: SessionStats
     var openLog: () -> Void
+    var echoStatus: () -> String = { "" }
     @State private var now = Date()
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
@@ -76,6 +80,11 @@ struct DevPanelView: View {
                 .font(.system(size: 11))
                 if !s.wakeMethods.isEmpty {
                     Text("Wakes: " + s.wakeMethods.map { "\($0.key) \($0.value)" }.joined(separator: " · ")).font(.system(size: 11))
+                }
+                let echo = echoStatus()
+                if !echo.isEmpty {
+                    Text("Mac's own sound: \(echo)").font(.system(size: 11)).foregroundColor(echo.hasPrefix("gating") ? .primary : .secondary)
+                        .id(now)
                 }
                 if let last = s.screenReads.last {
                     Text("Last screen read: “\(last.command.prefix(40))” — \(last.screenshots) shots").font(.system(size: 11)).foregroundColor(.secondary)

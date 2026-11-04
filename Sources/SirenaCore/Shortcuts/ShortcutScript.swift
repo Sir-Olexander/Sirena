@@ -182,7 +182,11 @@ public enum ShortcutScript {
     /// Actions for the steps with placeholder values filled in; confirmations are enforced again here.
     public static func actions(_ steps: [ShortcutStep], values: [String: String]) -> [Action] {
         var flat: [Action] = []
+        var lastReal: ShortcutStep?
         for step in enforceConfirmations(steps) {
+            // Typing into a field focused by label (a search box) replaces what is still in it from the last run.
+            if case .type = step, case .focus = lastReal { flat.append(.pressKeys(KeyCombo("a", [.command]))) }
+            if !step.isWait { lastReal = step }
             switch step {
             case .open(let s): flat.append(.open(fill(s, values)))
             case .switchTo(let s): flat.append(.switchTo(fill(s, values)))
