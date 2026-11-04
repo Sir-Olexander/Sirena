@@ -17,7 +17,7 @@ public struct RepeatedWordTracker {
                                        "window", "screen", "monitor", "page", "link", "number", "numbers", "tab", "tabs", "chrome", "safari", "google",
                                        "again", "more", "stop", "wait", "cancel", "undo", "click", "open", "close", "switch", "scroll", "type", "write",
                                        "insert", "copy", "paste", "select", "show", "hide", "read", "send", "message", "email", "note", "search", "find",
-                                       "para", "isso", "isto", "aqui", "para", "como", "está", "esta", "muito", "também", "tambem", "porque"]
+                                       "para", "isso", "isto", "aqui", "como", "está", "esta", "muito", "também", "tambem", "porque"]
 
     /// Feeds one utterance that was not dictation. Returns a word worth adding to the vocabulary, once.
     public mutating func note(_ utterance: String, knownWords: Set<String>, now: Date = Date()) -> String? {

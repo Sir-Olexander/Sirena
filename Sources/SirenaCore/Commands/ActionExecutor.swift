@@ -307,7 +307,7 @@ public final class ActionExecutor {
         case .mediaKey(let k):
             Keyboard.mediaKey(k); return k
         case .setVolume(let level, let muted):
-            return try ActionExecutor.setVolume(level: level, muted: muted)
+            return ActionExecutor.setVolume(level: level, muted: muted)
         case .scrollElement(let target, let dir, let amount):
             return try scrollElement(target, dir, amount, snapshot: &snap)
         case .zoomWindow:
@@ -348,7 +348,7 @@ public final class ActionExecutor {
     }
 
     /// Output volume through AppleScript: a level (0–100) and/or muted.
-    static func setVolume(level: Int?, muted: Bool?) throws -> String {
+    static func setVolume(level: Int?, muted: Bool?) -> String {
         var parts: [String] = []
         if let level {
             let l = max(0, min(100, level))
@@ -837,15 +837,15 @@ public final class ActionExecutor {
         case .page: px = 800
         }
         var point: CGPoint
-        var where_: String
+        var place: String
         if target == "here" {
             point = Mouse.location
-            where_ = "under the pointer"
+            place = "under the pointer"
         } else {
             guard let app = snap.frontApp, let win = AX.frontWindow(pid: app.pid) else { throw ExecutionError.failed("No window in front") }
             guard let (frame, name) = ActionExecutor.scrollTarget(target, in: win, pid: app.pid) else { throw ExecutionError.elementNotFound(target) }
             point = CGPoint(x: frame.midX, y: frame.midY)
-            where_ = "in “\(name.prefix(30))”"
+            place = "in “\(name.prefix(30))”"
         }
         switch dir {
         case .down: Mouse.scroll(dy: px, at: point)
@@ -853,7 +853,7 @@ public final class ActionExecutor {
         case .left: Mouse.scroll(dx: -px, dy: 0, at: point)
         case .right: Mouse.scroll(dx: px, dy: 0, at: point)
         }
-        return "Scrolled \(dir.rawValue) \(where_)"
+        return "Scrolled \(dir.rawValue) \(place)"
     }
 
     /// The frame to scroll in for a spoken part of the window: landmarks (sidebar, navigation, main), the chat column
