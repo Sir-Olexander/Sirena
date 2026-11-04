@@ -76,7 +76,7 @@ public final class AppController {
         }
         computerUse.excludedWindowIDs = { [weak self] in
             guard let self else { return [] }
-            return self.overlays.windowIDs + (self.numbers.windowID.map { [$0] } ?? [])
+            return self.overlays.windowIDs + self.numbers.windowIDs
         }
         wire()
         wireWindows()
