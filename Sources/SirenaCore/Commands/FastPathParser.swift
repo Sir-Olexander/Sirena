@@ -149,6 +149,9 @@ public enum FastPathParser {
         let dirs = "(up|down|left|right)"
         let amt = "(a\\s+lot|a\\s+bit|a\\s+little(?:\\s+bit)?|a\\s+page|a\\s+bunch|slightly)"
         let page: Set<String> = ["page", "the page", "this page", "screen", "the screen", "window", "the window", "web page", "site"]
+        // "scroll way down", "scroll a little bit down": amounts, not a part of the window (left to `scrolling`).
+        let amounts: Set<String> = ["way", "all the way", "a bit", "a little", "a little bit", "a lot", "a bunch", "some", "some more", "more", "further",
+                                    "slightly", "a page", "one page", "bit", "little", "little bit", "lot"]
         if let m = t.firstMatch("^scroll\\s*\(dirs)?\\s*\(amt)?\\s*(?:here|right here|under the (?:mouse|cursor|pointer)|where the (?:mouse|cursor|pointer) is|at the (?:mouse|cursor|pointer)|at the mouse position)$") {
             return ParsedCommand(.scrollElement("here", ScrollDirection(rawValue: m[1]) ?? .down, amount(m[2])))
         }
@@ -159,7 +162,7 @@ public enum FastPathParser {
             if page.contains(target) { return ParsedCommand(.scroll(dir, a)) }
             return ParsedCommand(.scrollElement(target, dir, a))
         }
-        if let m = t.firstMatch("^scroll\\s+(?:the\\s+)?(.+?)\\s+\(dirs)(?:\\s+\(amt))?$"), !["page", "all the way", "a bit", "a little"].contains(m[1]) {
+        if let m = t.firstMatch("^scroll\\s+(?:the\\s+)?(.+?)\\s+\(dirs)(?:\\s+\(amt))?$"), !amounts.contains(m[1]) {
             let dir = ScrollDirection(rawValue: m[2]) ?? .down
             if page.contains(m[1]) { return ParsedCommand(.scroll(dir, amount(m[3]))) }
             return ParsedCommand(.scrollElement(m[1], dir, amount(m[3])))
@@ -416,7 +419,6 @@ public enum FastPathParser {
         ("start dictating", .startDictation), ("start dictation", .startDictation), ("begin dictating", .startDictation),
         ("stop dictating", .stopDictation), ("stop dictation", .stopDictation),
         ("show numbers", .showNumbers), ("show the numbers", .showNumbers), ("hide numbers", .hideNumbers), ("hide the numbers", .hideNumbers),
-        ("stop listening", .turnOff),
     ]
 
     static func fuzzyControl(_ t: String, context: Context) -> ParsedCommand? {
@@ -434,7 +436,6 @@ public enum FastPathParser {
         case .stopDictation: return ParsedCommand(.stopDictation, label: "Dictation off")
         case .showNumbers: return ParsedCommand(.showNumbers, label: "Say “click <number>”")
         case .hideNumbers: return ParsedCommand(.hideNumbers, label: "Numbers hidden")
-        case .turnOff: return ParsedCommand(.turnOff, label: "Off")
         default: return nil
         }
     }
@@ -597,8 +598,13 @@ public enum FastPathParser {
         if let m = t.firstMatch("^(?:scroll|go|move)\\s+(?:to\\s+)?(?:the\\s+)?(top|bottom)(?:\\s+of\\s+the\\s+page)?$") {
             return ParsedCommand(.scrollTo(top: m[1] == "top"))
         }
-        if let m = t.firstMatch("^(?:scroll|scrolling|scroll the page|move|go)\\s*(down|up|left|right)?\\s*(a\\s+lot|a\\s+bit|a\\s+little|a\\s+little\\s+bit|more|a\\s+page|one\\s+page|all\\s+the\\s+way|a\\s+bunch|slightly|way\\s+down|way\\s+up|further|some\\s+more|again)?$") {
-            let dirWord = m[1].isEmpty ? "down" : m[1]
+        // "scroll a little bit down": the amount before the direction.
+        if let m = t.firstMatch("^scroll\\s+(all\\s+the\\s+way|a\\s+lot|a\\s+bit|a\\s+little(?:\\s+bit)?|a\\s+bunch|slightly|some\\s+more|more|further)\\s+(down|up|left|right)$") {
+            return scrolling("scroll \(m[2]) \(m[1])")
+        }
+        if let m = t.firstMatch("^(?:scroll|scrolling|scroll the page|move|go)\\s*(down|up|left|right)?\\s*(a\\s+lot|a\\s+bit|a\\s+little\\s+bit|a\\s+little|more|a\\s+page|one\\s+page|all\\s+the\\s+way|a\\s+bunch|slightly|way\\s+down|way\\s+up|further|some\\s+more|again)?$") {
+            // "scroll way up": the direction is inside the amount.
+            let dirWord = m[1].isEmpty ? (m[2].hasSuffix("up") ? "up" : "down") : m[1]
             guard let dir = ScrollDirection(rawValue: dirWord) else { return nil }
             let amt = m[2]
             var amount: ScrollAmount = .medium

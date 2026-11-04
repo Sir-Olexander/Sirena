@@ -25,7 +25,9 @@ final class HumanTestsRound1Tests: XCTestCase {
 
     func testScreenFallbackRules() {
         XCTAssertEqual(CommandPipeline.unresolvableTarget("switch to Zorbu later"), "zorbu later")
-        XCTAssertEqual(CommandPipeline.unresolvableTarget("open Flurb"), "flurb")
+        // "open X" may be a folder, a setting or a row on screen: the fallback stays available.
+        XCTAssertNil(CommandPipeline.unresolvableTarget("open Flurb"))
+        XCTAssertNil(CommandPipeline.unresolvableTarget("open dark mode"))
         XCTAssertNil(CommandPipeline.unresolvableTarget("open the first conversation"))
         XCTAssertNil(CommandPipeline.unresolvableTarget("open settings"))
         XCTAssertNil(CommandPipeline.unresolvableTarget("click consent"))
@@ -52,6 +54,9 @@ final class HumanTestsRound1Tests: XCTestCase {
         XCTAssertEqual(parse("stop reading"), [.readingControl(.stop)])
         XCTAssertEqual(parse("close that"), [.pressKeys(KeyCombo("w", [.command]))])
         XCTAssertEqual(UtteranceRouter.route("Ando", context: window), .command("Ando"))
+        // A near miss never switches Sirena off.
+        XCTAssertNil(parse("stop listing"))
+        XCTAssertEqual(parse("stop listening"), [.turnOff])
     }
 
     // MARK: 10.1 / 16.4 typing: never the command itself, never words for a missing snippet
@@ -122,6 +127,12 @@ final class HumanTestsRound1Tests: XCTestCase {
         XCTAssertEqual(parse("scroll down on the page"), [.scroll(.down, .medium)])
         XCTAssertEqual(parse("scroll down"), [.scroll(.down, .medium)])
         XCTAssertEqual(parse("scroll down a lot"), [.scroll(.down, .large)])
+        // Amounts are not parts of the window (PR #1 behaviour kept; "scroll way up" used to scroll down).
+        XCTAssertEqual(parse("scroll way down"), [.scroll(.down, .large)])
+        XCTAssertEqual(parse("scroll way up"), [.scroll(.up, .large)])
+        XCTAssertEqual(parse("scroll a little bit down"), [.scroll(.down, .small)])
+        XCTAssertEqual(parse("scroll a lot up"), [.scroll(.up, .large)])
+        XCTAssertEqual(parse("scroll all the way down"), [.scrollTo(top: false)])
         XCTAssertTrue(FastPathParser.isSafeWithoutName(ParsedCommand(.scrollElement("sidebar", .down, .medium))))
     }
 

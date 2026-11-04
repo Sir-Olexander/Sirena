@@ -406,7 +406,6 @@ public enum Keyboard {
     static let modifierKeyCodes: [(Modifier, CGKeyCode, CGEventFlags)] = [
         (.command, CGKeyCode(kVK_Command), .maskCommand), (.shift, CGKeyCode(kVK_Shift), .maskShift),
         (.option, CGKeyCode(kVK_Option), .maskAlternate), (.control, CGKeyCode(kVK_Control), .maskControl),
-        (.function, CGKeyCode(kVK_Function), .maskSecondaryFn),
     ]
 
     /// Presses a shortcut the way fingers do: modifier keys down (as flags-changed events), the key, then the

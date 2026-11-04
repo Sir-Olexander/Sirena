@@ -468,7 +468,7 @@ Added after round 1 (see `docs/human-tests-round1-analysis.md`):
 | R24 | VS Code with the Markdown preview open: "Sirena, show numbers" badges the editor pane first, then the preview; saying it again within 4 s keeps the badges | |
 | R25 | "Sirena, scroll down in the sidebar" moves the sidebar, not the page; "scroll down here" scrolls under the pointer (7.3) | |
 | R26 | Shortcut "call Barokas" twice in a row: the second run replaces the old name in the search field and finds the main WhatsApp window even if the call popup is still open (17.1) | |
-| R27 | Music on the speakers, Sirena waiting: a "hey" in the lyrics does not wake her; each history entry of the session carries an `echo` field (20.4) | |
+| R27 | Music on the speakers, Sirena waiting: lyrics do not wake her; each history entry of the session carries an `echo` field to show what the gate was doing (20.4) | |
 
 ---
 

@@ -112,9 +112,7 @@ public final class ListeningController {
             }
         }
         audio.onBuffer = { [weak self] buffer in
-            // The on-device detector gets the raw microphone: while the echo gate is silencing the Mac's own sound
-            // (music, a video), it must not hear it either, or a "hey" in the lyrics wakes her.
-            guard let self, self.localWakeActive, !self.echoGate.isSilencing else { return }
+            guard let self, self.localWakeActive else { return }
             self.localWake.append(buffer)
         }
         HistoryLog.echoStatusProvider = { [weak self] in
@@ -834,16 +832,16 @@ public final class ListeningController {
                 var hops = 0
                 while let p = pane.parent, p != win, hops < 30, (pane.frame.map { $0.width * $0.height } ?? 0) < wf.width * wf.height * 0.2 { pane = p; hops += 1 }
                 if pane != win, let pf = pane.frame, pf.width * pf.height < wf.width * wf.height * 0.9 {
-                    add(AX.collectInteractive(in: pane, within: wf, maxCount: 250, maxVisited: 3000, timeBudget: 0.7))
+                    add(AX.collectInteractive(in: pane, within: wf, maxCount: 250, maxVisited: 3000, timeBudget: 0.4))
                 }
             }
-            add(AX.collectInteractive(in: win, within: wf, maxCount: 400, maxVisited: 5000, timeBudget: 1.2))
+            add(AX.collectInteractive(in: win, within: wf, maxCount: 400, maxVisited: 5000, timeBudget: 0.8))
         }
         let frontScreen = Screens.frontWindowScreen()
         for screen in Screens.ordered() where screen != frontScreen {
             guard let top = Screens.topWindow(on: screen), let win = top.window, let wf = win.frame else { continue }
             if top.app.bundleId.contains("google.Chrome") || ScreenContext.isElectronLike(top.app) { AX.enableEnhancedAccessibility(pid: top.app.pid) }
-            add(AX.collectInteractive(in: win, within: wf, maxCount: 150, maxVisited: 2500, timeBudget: 0.6))
+            add(AX.collectInteractive(in: win, within: wf, maxCount: 150, maxVisited: 2500, timeBudget: 0.35))
         }
         return (out, front)
     }
