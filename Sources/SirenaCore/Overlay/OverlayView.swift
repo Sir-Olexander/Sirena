@@ -73,14 +73,14 @@ public struct OverlayView: View {
 
     private var waitingPill: some View {
         HStack(spacing: 6 * scale) {
-            Image(systemName: model.privateListening ? "lock.fill" : "moon.zzz.fill").font(.system(size: 10 * scale))
+            Image(systemName: model.privateListening ? "lock.fill" : "moon.zzz.fill").font(.system(size: 9 * scale))
             Text(model.connectionNote ?? (model.privateListening ? "Say “Hey Sirena” · on-device" : "Say “Hey Sirena”"))
-                .font(.system(size: 11 * scale, weight: .medium))
+                .font(.system(size: 10.5 * scale, weight: .medium))
         }
         .foregroundColor(.white.opacity(0.75))
-        .padding(.horizontal, 10 * scale).padding(.vertical, 5 * scale)
-        .background(Capsule().fill(SirenaPalette.ink.opacity(0.6)))
-        .overlay(Capsule().stroke(Color.white.opacity(0.15), lineWidth: 1))
+        .padding(.horizontal, 9 * scale).padding(.vertical, 3.5 * scale)
+        .background(Capsule().fill(SirenaPalette.restFill))
+        .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.5))
         .padding(6)
         .contentShape(Rectangle())
     }
@@ -97,7 +97,7 @@ public struct OverlayView: View {
     }
 
     private var mainPill: some View {
-        HStack(spacing: 8 * scale) {
+        HStack(spacing: 6 * scale) {
             dotWithRing
             if expanded {
                 VStack(alignment: .leading, spacing: 2) {
@@ -107,7 +107,7 @@ public struct OverlayView: View {
                                 .font(.system(size: 11 * scale)).foregroundColor(accent)
                         }
                         Text(primaryLine)
-                            .font(.system(size: 12.5 * scale, weight: .medium))
+                            .font(.system(size: 12 * scale, weight: .medium))
                             .lineLimit(1)
                             .truncationMode(.head)
                             .frame(maxWidth: 420 * scale, alignment: .leading)
@@ -127,16 +127,16 @@ public struct OverlayView: View {
                 .transition(.opacity.combined(with: .move(edge: .leading)))
             } else {
                 Text(model.isDictating ? "Dictating" : "Listening")
-                    .font(.system(size: 11 * scale, weight: .medium))
-                    .foregroundColor(.white.opacity(0.7))
+                    .font(.system(size: 10.5 * scale, weight: .medium))
+                    .foregroundColor(.white.opacity(0.75))
             }
             // The sound wave only while expanded or dictating.
             if (expanded || model.isDictating) && model.readingState == .idle { waveform }
         }
-        .padding(.horizontal, 12 * scale).padding(.vertical, 7 * scale)
+        .padding(.leading, 7 * scale).padding(.trailing, 10 * scale).padding(.vertical, (expanded ? 4.5 : 3) * scale)
         .background(Capsule().fill(pillColor))
-        .overlay(Capsule().stroke(accent.opacity(0.55), lineWidth: 1))
-        .shadow(color: .black.opacity(0.35), radius: 10, y: 3)
+        .overlay(Capsule().stroke(accent.opacity(0.3), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.2), radius: 6, y: 2)
         .contentShape(Capsule())
     }
 
@@ -165,7 +165,8 @@ public struct OverlayView: View {
         if case .error = model.mode { return SirenaPalette.errorFill }
         if model.readingState != .idle { return SirenaPalette.lilacFill }
         if model.isDictating { return SirenaPalette.pearlFill }
-        return SirenaPalette.inkFill
+        // Just "Listening": barely there. A message to read gets a little more backing.
+        return expanded ? SirenaPalette.inkFill : SirenaPalette.restFill
     }
 
     private var dotWithRing: some View {
@@ -173,18 +174,18 @@ public struct OverlayView: View {
             if let p = model.followUpProgress {
                 Circle()
                     .trim(from: 0, to: p)
-                    .stroke(accent, style: StrokeStyle(lineWidth: 2 * scale, lineCap: .round))
+                    .stroke(accent, style: StrokeStyle(lineWidth: 1.5 * scale, lineCap: .round))
                     .rotationEffect(.degrees(-90))
-                    .frame(width: 18 * scale, height: 18 * scale)
+                    .frame(width: 13 * scale, height: 13 * scale)
             }
             Circle()
                 .fill(accent)
-                .frame(width: 10 * scale, height: 10 * scale)
+                .frame(width: 7 * scale, height: 7 * scale)
                 .scaleEffect(model.isSpeaking ? 1.25 : 1.0)
-                .shadow(color: accent.opacity(0.9), radius: model.isSpeaking ? 6 : 2)
+                .shadow(color: accent.opacity(0.8), radius: model.isSpeaking ? 4 : 1.5)
                 .animation(.easeInOut(duration: 0.15), value: model.isSpeaking)
         }
-        .frame(width: 20 * scale, height: 20 * scale)
+        .frame(width: 14 * scale, height: 14 * scale)
     }
 
     private var waveform: some View {
@@ -192,10 +193,10 @@ public struct OverlayView: View {
             ForEach(Array(model.levels.suffix(14).enumerated()), id: \.offset) { _, v in
                 RoundedRectangle(cornerRadius: 1)
                     .fill(accent.opacity(0.9))
-                    .frame(width: 2 * scale, height: max(2, CGFloat(v) * 16 * scale + 2))
+                    .frame(width: 1.5 * scale, height: max(2, CGFloat(v) * 11 * scale + 2))
             }
         }
-        .frame(height: 18 * scale)
+        .frame(height: 13 * scale)
         .animation(.linear(duration: 0.08), value: model.levels)
     }
 
