@@ -51,6 +51,8 @@ public final class ActionExecutor {
     private let inserter: TextInserter
     private let queue = DispatchQueue(label: "ai.sirena.executor", qos: .userInitiated)
     private var undoStack: [UndoRecord] = []
+    /// When an action last put the focus somewhere on purpose (focus, composer, click).
+    private var focusedByUsAt = Date.distantPast
     /// Handles `.computerUse` (set by the pipeline).
     public var computerUseHandler: ((String) async throws -> String)?
     /// Handles `.editText` (set by the app: model rewrite of the dictated text).
@@ -268,16 +270,20 @@ public final class ActionExecutor {
             }
             return top ? "Top" : "Bottom"
         case .clickElement(let label):
+            focusedByUsAt = Date()
             return try click(label: label, snapshot: &snap)
         case .clickNumber(let n):
+            focusedByUsAt = Date()
             guard let el = numbers.element(n) else { throw ExecutionError.elementNotFound("number \(n)") }
             numbers.hide()
             usleep(60_000)
             AX.click(el)
             return "Clicked \(n) (\(el.name.prefix(30)))"
         case .focusElement(let label):
+            focusedByUsAt = Date()
             return try focus(label: label, snapshot: &snap)
         case .clickId(let id, let label), .focusId(let id, let label):
+            focusedByUsAt = Date()
             var isClick = false
             if case .clickId = action { isClick = true }
             // The id is only meaningful in the snapshot the model saw; without it, fall back to the label.
@@ -294,6 +300,7 @@ public final class ActionExecutor {
             AX.focus(el)
             return "Focused “\(el.name.prefix(30))”"
         case .focusComposer:
+            focusedByUsAt = Date()
             return focusComposer(snapshot: &snap)
         case .typeText(let text):
             try ensureTextFocus(snapshot: snap)
@@ -336,6 +343,8 @@ public final class ActionExecutor {
     /// any focused element is accepted there.
     func ensureTextFocus(snapshot snap: ScreenSnapshot) throws {
         if dryRun { return }
+        // Sirena focused or clicked something herself a moment ago (the composer, a labelled field): trust it, as before.
+        if Date().timeIntervalSince(focusedByUsAt) < 4 { return }
         if AX.focusedTextElement() != nil { return }
         guard let front = snap.frontApp else { throw ExecutionError.failed("No text field is focused — click into one first") }
         let webish = BrowserControl.isBrowser(front.bundleId) || ScreenContext.isElectronLike(front)
@@ -813,10 +822,14 @@ public final class ActionExecutor {
     private func deepFind(label: String, app: AppInfo, preferInputs: Bool) -> (UIElementInfo, String?)? {
         let ax = AXElement.application(pid: app.pid)
         let front = AX.frontWindow(pid: app.pid)
-        if let w = front, let el = AX.findElement(label: label, in: w, preferInputs: preferInputs) { return (el, nil) }
+        // One budget for the whole search, so a label that is nowhere costs at most ~1.5 s before the model takes over.
+        let deadline = Date().addingTimeInterval(1.5)
+        if let w = front, let el = AX.findElement(label: label, in: w, preferInputs: preferInputs, timeBudget: 1.0) { return (el, nil) }
         for w in ax.windows.prefix(6) where front == nil || w != front! {
+            let left = deadline.timeIntervalSinceNow
+            guard left > 0.1 else { break }
             guard (w.subrole ?? "AXStandardWindow") == "AXStandardWindow", w.bool(kAXMinimizedAttribute) != true else { continue }
-            if let el = AX.findElement(label: label, in: w, preferInputs: preferInputs) {
+            if let el = AX.findElement(label: label, in: w, preferInputs: preferInputs, timeBudget: left) {
                 w.set(kAXMainAttribute, kCFBooleanTrue)
                 w.perform(kAXRaiseAction)
                 usleep(150_000)

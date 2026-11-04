@@ -558,15 +558,15 @@ public final class CommandPipeline {
         return words.dropFirst().contains { !vagueWords.contains($0) }
     }
 
-    /// "switch to Zorbulator", "open Flurb": the fast path and the model found no app, tab, window or site with that
-    /// name. A screenshot cannot find it either, so the fallback is never tried for these; the name is returned.
+    /// "switch to Zorbulator": the fast path and the model found no app, tab, window or site with that name. ("open X"
+    /// is left alone: X can be a folder, a setting or a row on screen.) A screenshot cannot find it either, so the fallback is never tried for these; the name is returned.
     static func unresolvableTarget(_ command: String) -> String? {
         guard let parsed = FastPathParser.parse(command) else { return nil }
         let real = parsed.actions.filter { if case .pause = $0 { return false }; return true }
         guard real.count == 1, let a = real.first else { return nil }
         let name: String
         switch a {
-        case .switchTo(let n), .open(let n), .activateApp(let n), .launchApp(let n): name = n
+        case .switchTo(let n), .activateApp(let n): name = n
         case .inApp(let n, _): name = n
         default: return nil
         }
