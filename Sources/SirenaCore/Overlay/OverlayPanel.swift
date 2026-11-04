@@ -121,10 +121,7 @@ public final class OverlayPanel: NSPanel {
         let size = hosting.fittingSize
         guard size.width > 0, size.height > 0, size != lastSize else { return }
         lastSize = size
-        var frame = NSRect(x: anchor.x - size.width / 2, y: anchor.y, width: size.width, height: size.height)
-        let vf = screenRef.visibleFrame
-        frame.origin.x = max(vf.minX, min(frame.origin.x, vf.maxX - frame.width))
-        frame.origin.y = max(vf.minY, min(frame.origin.y, vf.maxY - frame.height))
+        let frame = OverlayPanel.placement(size: size, anchor: anchor, screen: screenRef.frame)
         if animated {
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.18
@@ -134,6 +131,17 @@ public final class OverlayPanel: NSPanel {
         } else {
             setFrame(frame, display: true)
         }
+    }
+
+    /// The panel frame for a content size: bottom-center on the anchor, kept inside the screen.
+    /// Only the screen's edges limit it, not its visible area: that area loses the Dock's height whenever the Dock
+    /// shows on this screen (it follows the pointer between monitors, and hides for full-screen apps), so clamping to
+    /// it pushed a pill placed low up by the Dock's height at one resize and let it drop back at the next.
+    static func placement(size: CGSize, anchor: CGPoint, screen: CGRect) -> CGRect {
+        var frame = CGRect(x: anchor.x - size.width / 2, y: anchor.y, width: size.width, height: size.height)
+        frame.origin.x = max(screen.minX, min(frame.origin.x, screen.maxX - frame.width))
+        frame.origin.y = max(screen.minY, min(frame.origin.y, screen.maxY - frame.height))
+        return frame
     }
 
     /// Dragging changes the anchor (bottom-center), remembered for this screen.
