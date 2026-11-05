@@ -24,7 +24,7 @@ AppleScript. Most commands never need a screenshot, and the simple ones never re
 
 <p align="center"><img src="docs/images/how-it-works.svg" alt="How it works: microphone → speech to text → utterance router → command pipeline (fast path, Muse Spark, computer use) → actions" width="100%"></p>
 
-Built for the Meta Model API hackathon on Meta's models:
+Built for the Meta Global AI Developer Hackathon 2026 on Meta's models:
 
 | Job | Model |
 |---|---|
