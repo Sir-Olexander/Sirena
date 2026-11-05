@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/images/banner.png" alt="Sirena: use your Mac hands-free. Talk to her to control apps, tabs and buttons, or to dictate clean text into any app." width="100%"></p>
+<p align="center"><img src="docs/images/banner-hackathon.png" alt="Sirena: use your Mac hands-free. Talk to her to control apps, tabs and buttons, or to dictate clean text into any app. Built for the Meta Global AI Developer Hackathon 2026." width="100%"></p>
 
 <p align="center"><img src="docs/images/overlay/demo-command.gif" alt="Saying “Sirena, switch to Chrome”: the pill wakes, shows the words live, then confirms" width="560"></p>
 
