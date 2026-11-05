@@ -1,9 +1,4 @@
-<p align="center"><img src="Resources/Logo.svg" alt="Sirena logo" width="160"></p>
-
-<h1 align="center">Sirena</h1>
-
-<p align="center"><b>Use your Mac hands-free, just by talking.</b><br>
-A menu bar app that controls apps, clicks buttons and types clean text, all by voice.</p>
+<p align="center"><img src="docs/images/banner.png" alt="Sirena: use your Mac hands-free. Talk to her to control apps, tabs and buttons, or to dictate clean text into any app." width="100%"></p>
 
 <p align="center"><img src="docs/images/overlay/demo-command.gif" alt="Saying “Sirena, switch to Chrome”: the pill wakes, shows the words live, then confirms" width="560"></p>
 
