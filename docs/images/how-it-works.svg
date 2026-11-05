@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="440" viewBox="0 0 1240 440" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title>How Sirena works: microphone, speech recognition, utterance router, command pipeline, actions</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b0b10"/>
+      <stop offset="1" stop-color="#14121c"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#cdc4f7"/>
+    </marker>
+    <style>
+      .card  { fill: #17161f; stroke: #34314a; stroke-width: 1.2; }
+      .title { fill: #e6edf7; font-size: 17px; font-weight: 600; }
+      .sub   { fill: #cdc4f7; font-size: 12.5px; }
+      .note  { fill: #9a9aa6; font-size: 13px; }
+      .step  { fill: #f2d6a3; font-size: 12px; font-weight: 700; }
+      .tier  { fill: #1d1b27; stroke: #3d3955; stroke-width: 1; }
+      .tiert { fill: #e6edf7; font-size: 13.5px; font-weight: 600; }
+      .tiers { fill: #9a9aa6; font-size: 12px; }
+      .link  { stroke: #cdc4f7; stroke-width: 1.6; fill: none; }
+    </style>
+  </defs>
+
+  <rect width="1240" height="440" rx="18" fill="url(#bg)"/>
+
+  <!-- 1. Microphone -->
+  <rect class="card" x="30" y="40" width="150" height="96" rx="14"/>
+  <text class="step" x="48" y="66">1</text>
+  <text class="title" x="48" y="92">Microphone</text>
+  <text class="sub" x="48" y="114">voice processing on</text>
+  <text class="note" x="38" y="176">Noise suppression,</text>
+  <text class="note" x="38" y="196">gain control and</text>
+  <text class="note" x="38" y="216">echo cancellation</text>
+
+  <!-- 2. Speech to text -->
+  <rect class="card" x="220" y="40" width="220" height="96" rx="14"/>
+  <text class="step" x="238" y="66">2</text>
+  <text class="title" x="238" y="92">Speech to text</text>
+  <text class="sub" x="238" y="114">Muse Voice Transcribe</text>
+  <text class="note" x="228" y="176">Streams audio, ends each</text>
+  <text class="note" x="228" y="196">utterance at a pause</text>
+  <text class="note" x="228" y="226">Draft words show live</text>
+  <text class="note" x="228" y="246">in the overlay</text>
+  <text class="note" x="228" y="276">Knows your app, tab and</text>
+  <text class="note" x="228" y="296">custom words</text>
+
+  <!-- 3. Router -->
+  <rect class="card" x="480" y="40" width="220" height="96" rx="14"/>
+  <text class="step" x="498" y="66">3</text>
+  <text class="title" x="498" y="92">Utterance router</text>
+  <text class="sub" x="498" y="114">is this meant for Sirena?</text>
+  <text class="note" x="490" y="176">“Sirena …” rule</text>
+  <text class="note" x="490" y="206">Follow-up window</text>
+  <text class="note" x="490" y="226">(no name needed)</text>
+  <text class="note" x="490" y="256">Dictation mode</text>
+  <text class="note" x="490" y="286">Yes / Cancel answers</text>
+
+  <!-- 4. Command pipeline -->
+  <rect class="card" x="740" y="40" width="280" height="96" rx="14"/>
+  <text class="step" x="758" y="66">4</text>
+  <text class="title" x="758" y="92">Command pipeline</text>
+  <text class="sub" x="758" y="114">fastest layer that can do it</text>
+
+  <rect class="tier" x="740" y="158" width="280" height="62" rx="11"/>
+  <text class="tiert" x="756" y="184">Fast path</text>
+  <text class="tiers" x="756" y="205">Built-in rules · under 1 ms</text>
+
+  <rect class="tier" x="740" y="240" width="280" height="62" rx="11"/>
+  <text class="tiert" x="756" y="266">Muse Spark tool calls</text>
+  <text class="tiers" x="756" y="287">With a text snapshot of the screen</text>
+
+  <rect class="tier" x="740" y="322" width="280" height="62" rx="11"/>
+  <text class="tiert" x="756" y="348">Computer use</text>
+  <text class="tiers" x="756" y="369">Screenshots · last resort</text>
+
+  <path class="link" d="M1004 220 v20" marker-end="url(#arrow)"/>
+  <path class="link" d="M1004 302 v20" marker-end="url(#arrow)"/>
+  <text class="tiers" x="740" y="410">If a layer can’t handle it, the next one tries</text>
+
+  <!-- 5. Actions -->
+  <rect class="card" x="1060" y="40" width="150" height="96" rx="14"/>
+  <text class="step" x="1078" y="66">5</text>
+  <text class="title" x="1078" y="92">Actions</text>
+  <text class="sub" x="1078" y="114">done on your Mac</text>
+  <text class="note" x="1068" y="176">Accessibility API</text>
+  <text class="note" x="1068" y="206">Keyboard events</text>
+  <text class="note" x="1068" y="236">AppleScript</text>
+
+  <!-- arrows between stages -->
+  <path class="link" d="M182 88 H216" marker-end="url(#arrow)"/>
+  <path class="link" d="M442 88 H476" marker-end="url(#arrow)"/>
+  <path class="link" d="M702 88 H736" marker-end="url(#arrow)"/>
+  <path class="link" d="M1022 88 H1056" marker-end="url(#arrow)"/>
+</svg>

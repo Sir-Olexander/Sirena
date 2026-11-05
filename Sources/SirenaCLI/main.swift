@@ -237,21 +237,10 @@ case "render-overlay":
     _ = NSApplication.shared
     let icon = NSWorkspace.shared.icon(forFile: "/Applications/Google Chrome.app")
     func render(_ name: String, screen: String? = nil, _ setup: (OverlayModel) -> Void) {
-        let m = OverlayModel()
-        setup(m)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.15))
         // Transparent background, Retina scale: the PNGs show the pill as it floats over the desktop.
-        let view = NSHostingView(rootView: OverlayView(model: m, screenID: screen).padding(10))
-        view.frame = NSRect(origin: .zero, size: view.fittingSize)
-        view.layoutSubtreeIfNeeded()
-        let px = 2
-        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(view.bounds.width) * px, pixelsHigh: Int(view.bounds.height) * px,
-                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return }
-        rep.size = view.bounds.size
-        view.cacheDisplay(in: view.bounds, to: rep)
-        try? rep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent("\(name).png"))
-        print("rendered \(name) \(Int(view.bounds.width))x\(Int(view.bounds.height))")
+        guard let rep = OverlayRender.pill(setup, screen: screen) else { return }
+        OverlayRender.write(rep, to: dir.appendingPathComponent("\(name).png"))
+        print("rendered \(name) \(Int(rep.size.width))x\(Int(rep.size.height))")
     }
     render("1-off") { _ in }
     render("2-waiting") { $0.setState(.waiting) }
@@ -268,6 +257,50 @@ case "render-overlay":
     render("7-confirm") { m in m.setState(.awake); m.showConfirm("Click “Send” in WhatsApp?", detail: "Safety check: the agent is about to send a message.") }
     render("8-screen-active", screen: "A") { m in m.setState(.awake); m.setScreenCount(2); m.setActiveScreen("A"); m.setFrontApp(name: "Google Chrome", icon: icon); m.showWorking("Moved Google Chrome to screen 2", autoClear: 60) }
     render("9-screen-inactive", screen: "B") { m in m.setState(.awake); m.setScreenCount(2); m.setActiveScreen("A"); m.setFrontApp(name: "Google Chrome", icon: icon); m.showWorking("Moved Google Chrome to screen 2", autoClear: 60) }
+
+case "render-demo":
+    // sirena-cli render-demo <dir>   — README images: pill stills on a dark backdrop plus numbered frames for demo GIFs
+    let dir = URL(fileURLWithPath: positional.first ?? "/tmp/sirena-demo")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    _ = NSApplication.shared
+    let icon = NSWorkspace.shared.icon(forFile: "/Applications/Google Chrome.app")
+    let wave: (OverlayModel) -> Void = { m in for _ in 0..<30 { m.pushLevel(Float.random(in: 0.05...0.7)) } }
+    func still(_ name: String, _ setup: (OverlayModel) -> Void) {
+        guard let pill = OverlayRender.pill(setup) else { return }
+        OverlayRender.write(OverlayRender.onBackdrop(pill), to: dir.appendingPathComponent("\(name).png"))
+        print("still \(name)")
+    }
+    still("waiting") { $0.setState(.waiting) }
+    still("awake-result") { m in m.setState(.awake); m.setFrontApp(name: "Google Chrome", icon: icon); m.showWorking("Switched to Google Chrome", autoClear: 60); wave(m) }
+    still("dictating") { m in m.setState(.awake); m.setDictating(true); m.setPartial("so the meeting is moved to Friday at ten"); wave(m) }
+    still("reading") { m in m.setState(.awake); m.setFrontApp(name: "Google Chrome", icon: icon); m.setReading(.reading, title: "How Muse Spark works", progress: 0.35) }
+    still("confirm") { m in m.setState(.awake); m.showConfirm("Send “See you at ten” in WhatsApp?", detail: "Safety check: the agent is about to send a message.") }
+    still("error") { m in m.setState(.awake); m.showError("Could not find “Send” in WhatsApp") }
+    // A story is a list of (setup, hold in frames); frames share one canvas so the GIF does not jump.
+    func story(_ name: String, canvas: NSSize, _ steps: [((OverlayModel) -> Void, Int)]) {
+        let sub = dir.appendingPathComponent(name)
+        try? FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        var n = 0
+        for (setup, hold) in steps {
+            guard let pill = OverlayRender.pill(setup, settle: 0.05), let frame = OverlayRender.onBackdrop(pill, canvas: canvas) else { continue }
+            for _ in 0..<hold { OverlayRender.write(frame, to: sub.appendingPathComponent(String(format: "%04d.png", n))); n += 1 }
+        }
+        print("story \(name): \(n) frames")
+    }
+    func words(_ text: String) -> [String] { let w = text.split(separator: " "); return (1...w.count).map { w.prefix($0).joined(separator: " ") } }
+    // 10 frames per second.
+    var command: [((OverlayModel) -> Void, Int)] = [({ $0.setState(.waiting) }, 12)]
+    for p in words("Hey Sirena") { command.append(({ m in m.setState(.waiting); m.setState(.awake); m.setPartial(p); wave(m) }, 4)) }
+    command.append(({ m in m.setState(.awake); wave(m) }, 5))
+    for p in words("switch to Chrome") { command.append(({ m in m.setState(.awake); m.setPartial(p); wave(m) }, 4)) }
+    command.append(({ m in m.setState(.awake); m.setPartial("switch to Chrome"); wave(m) }, 4))
+    command.append(({ m in m.setState(.awake); m.setFrontApp(name: "Google Chrome", icon: icon); m.showWorking("Switched to Google Chrome", autoClear: 60) }, 25))
+    command.append(({ $0.setState(.waiting) }, 8))
+    story("demo-command", canvas: NSSize(width: 400, height: 120), command)
+    var dictation: [((OverlayModel) -> Void, Int)] = [({ m in m.setState(.awake); m.setDictating(true); wave(m) }, 8)]
+    for p in words("so the meeting is moved to Friday at ten, can everyone make it?") { dictation.append(({ m in m.setState(.awake); m.setDictating(true); m.setPartial(p); wave(m) }, 3)) }
+    dictation.append(({ m in m.setState(.awake); m.setDictating(true); m.setPartial("so the meeting is moved to Friday at ten, can everyone make it?") }, 25))
+    story("demo-dictation", canvas: NSSize(width: 560, height: 120), dictation)
 
 case "echo-bench":
     // sirena-cli echo-bench   — simulated music + voice through the echo canceller and gate: speed and result

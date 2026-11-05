@@ -1,108 +1,159 @@
-<p align="center"><img src="Resources/Logo.svg" alt="Sirena logo" width="200"></p>
+<p align="center"><img src="Resources/Logo.svg" alt="Sirena logo" width="160"></p>
 
-# Sirena
+<h1 align="center">Sirena</h1>
 
-Sirena is a macOS menu bar app that lets you use your Mac **hands-free**. You talk to her to control the
-computer ("Sirena, switch to Chrome", "go to the first tab", "click Send") or to dictate clean text into any
-app. She understands commands in the context of what is on screen and carries them out instantly, through
-the Accessibility API, keyboard events and AppleScript rather than slow screenshot loops.
+<p align="center"><b>Use your Mac hands-free, just by talking.</b><br>
+A menu bar app that controls apps, clicks buttons and types clean text, all by voice.</p>
 
-Built for the Meta Model API hackathon on top of Meta's models:
+<p align="center"><img src="docs/images/overlay/demo-command.gif" alt="Saying “Sirena, switch to Chrome”: the pill wakes, shows the words live, then confirms" width="560"></p>
+
+## What you can say
+
+| You say | Sirena does |
+|---|---|
+| “Sirena, switch to Chrome” | Brings Chrome to the front |
+| “Go to the first tab” | Switches tab (no name needed right after a command) |
+| “Sirena, click Send” | Finds the button and clicks it, after asking first |
+| “Sirena, start dictating” | Types everything you say, cleaned up, until “Sirena, stop” |
+| “Sirena, read the article” | Reads the page aloud, skipping menus and ads |
+| “Sirena, show numbers” → “click 7” | Puts a number on every button, then clicks the one you say |
+| “Sirena, copy the first paragraph” | Copies text without you selecting it |
+| “Sirena, move this window to the other screen” | Moves the window to your second display |
+
+She works in Portuguese too (“para”, “espera”, “cancela”, “sim”, “não”).
+
+## Why it feels fast
+
+Sirena reads what is on screen through the macOS Accessibility API and acts with keyboard events and
+AppleScript. Most commands never need a screenshot, and the simple ones never reach a model at all.
+
+<p align="center"><img src="docs/images/how-it-works.svg" alt="How it works: microphone → speech to text → utterance router → command pipeline (fast path, Muse Spark, computer use) → actions" width="100%"></p>
+
+Built for the Meta Model API hackathon on Meta's models:
 
 | Job | Model |
 |---|---|
-| Speech to text, streaming with endpointing | `muse-voice-transcribe-1.0` (realtime WebSocket, one-shot fallback) |
-| Command understanding + dictation cleanup | `muse-spark-1.3` (tool calling, `reasoning_effort: minimal`) |
-| Screenshot fallback ("Looking at the screen…") | `muse-spark-1.3` computer use via the Responses API |
+| Speech to text, live, ends each utterance at a pause | `muse-voice-transcribe-1.0` (realtime WebSocket, one-shot fallback) |
+| Understanding commands, cleaning up dictation | `muse-spark-1.3` (tool calling, `reasoning_effort: minimal`) |
+| Looking at the screen when all else fails | `muse-spark-1.3` computer use via the Responses API |
 | Optional private mode, fully on-device | `Muse Glimmer` through Ollama / LM Studio / llama.cpp |
 
-## How it works
+## Features
 
-```
-mic ──► Muse Voice Transcribe (ENDPOINTING) ──► utterance router ──► command pipeline ──► actions
-           partials shown live in the overlay       "Sirena" rule        1. fast path (regex, <1 ms)
-           keywords = apps + tabs + custom words     follow-up window     2. Muse Spark tool calls + screen snapshot
-                                                     dictation mode       3. computer use (screenshots)
-                                                     confirmations
-```
+### Talking to Sirena
 
-* **Three listening states.** Off (mic closed) → one click. Waiting (only "Hey Sirena" wakes her) → say
-  "Sirena, wait" or 2 minutes of silence. Awake (continuous listening, each pause ends an utterance).
-* **Private waiting.** While waiting, "Hey Sirena" is detected with Apple's on-device speech recognition and
-  the stream to Meta is paused: no audio leaves the Mac until she is awake (lock icon in the pill). Falls back
-  to streaming if on-device recognition is unavailable; can be turned off in the menu.
-* **The "Sirena" rule.** A command runs when the utterance starts with "Sirena" (or a close misrecognition
-  such as "Serena"), or has a short command right next to the name ("wait Sirena", "Para, para Sirena, para").
-  For 8 seconds after a command (12 after "Hey Sirena"), counted from when you start speaking, the next one
-  works without the name; the overlay shows a countdown ring. Until 20 seconds after the last command,
-  navigation the fast path understands (scroll, tabs, apps, "first link") still works without the name.
-  Without the name, only speech that looks like a command runs: fillers ("okay", "uh"), questions, cut-off
-  commands ("switch to") and room chatter never reach the model. "again" / "more" repeat the last command.
-  Portuguese controls work too (para, espera, cancela, sim, não).
-* **Dictation.** "Sirena, type …" inserts just that text. "Sirena, start dictating" types everything you say
-  (cleaned up by Muse Spark: filler words, false starts, punctuation, lists, tone adapted to the app) until
-  "Sirena, stop". "Sirena, delete that", "Sirena, new line", "Sirena, undo" work while dictating.
-* **Confirmations.** Anything irreversible (sending a message, deleting, closing unsaved work) shows
-  "Send “see you at 5” in WhatsApp? Yes / Cancel" and waits for "yes" or "cancel" (Enter and Esc also work).
-  A "yes" always does something: a question with no action behind it is never shown. "Sirena, send" sends what
-  is in the message box after that question.
-* **Numbers mode.** "Sirena, show numbers" puts a badge on every clickable element of the front window
-  (from the Accessibility tree), then "click 7".
-* **Live vocabulary.** The recognizer gets the names of running apps, window titles, browser tab titles
-  and your custom words as `keywords`, so "switch to the Meta docs tab" is heard correctly.
-* **Overlay on every screen.** A non-activating floating panel that never takes focus, on every connected screen
-  and Space, over full-screen apps. All copies show the same state; the one on the screen with the front window
-  is marked, the others are dimmed. Each screen remembers its own position. The expanded pill shows the front
-  app's icon and name; the sound wave appears only while expanded or dictating. The colors follow the logo
-  (moonlight white on black): dictation is pearl gold, reading silver lilac. Optional per-stage latency (speech recognition · understanding · action).
-* **Several screens.** "Sirena, move this window to the other screen / the left monitor / screen 2" and
-  "Sirena, switch to the other screen" (focuses the topmost window there and moves the pointer).
-* **Copy text without selecting it.** "Copy the first paragraph / the paragraph about … / the paragraph that starts with …
-  / the title / the second sentence / the last message" finds the text through Accessibility (the article only, skipping
-  menus, sidebars, ads and reference lists), puts it on the clipboard, selects it on screen and shows the first words.
-* **Lists and text edits in dictation.** "first point…", "point two…", "next item…", "ponto três…" said in
-  separate pauses land on their own line, correctly numbered (continuing a list already in the field).
-  "Sirena, make that a list", "separate the points with two line breaks", "fix the grammar" rewrite the text
-  dictated in this session in place; text edits never go to the screenshot fallback, run only on dictated text, a
-  selection in an editable field or an editable field's contents, and are never used to copy, select or read.
-* **Read aloud.** "Sirena, read this" (selection), "read the article" (main content only, skipping menus,
-  sidebars and ads), "read the page" (all visible text). While reading, "stop", "pause", "resume", "faster",
-  "slower" work without the name. Sirena's own voice is echo-cancelled and filtered by matching the text being read.
-* **Background noise.** The microphone goes through Apple's voice processing (noise suppression, gain control,
-  echo cancellation) before recognition; menu toggle, on by default, automatic fallback on devices that refuse it.
-* **Websites and browsers.** "Open Google / YouTube / Gmail…" opens the site (or its open tab) in the browser in
-  front, else the browser used last; "open Google Chrome" or "open Google app" still opens the app. Web
-  searches also go to that browser.
-* **Shortcut book.** Save named commands: "call mom" = "open WhatsApp, select Mother and call her". Sirena
-  writes the steps by following a written rulebook (`docs/shortcut-rulebook.md`); you review them before saving.
-  Placeholders ("message {person} saying {text}"), confirmations before calling / sending / deleting, triggered
-  by "Sirena, run <name>" or the name itself. Also runs your Apple Shortcuts by name.
-* **Notes and snippets.** "Sirena, note <text>" saves a note without leaving your app; "Sirena, insert my email"
-  types a saved snippet. Both are editable in a menu window.
-* **Learning.** After Sirena is turned off, she looks for commands you corrected or undid, commands that kept
-  needing the model or the screenshot fallback, and failures you finished another way, and proposes shortcuts
-  ("Suggestions (N)" in the menu: Accept, Edit, Later, Never). Local only, no tokens, at most three pending and
-  new ones at most once a day. "Sirena, forget that" removes a learned shortcut that just ran.
-* **Dev mode.** A usage panel since Sirena was turned on (audio seconds, tokens in/out per category, screen
-  reads and what triggered them, estimated cost, commands per layer, failures, latency, reconnects, wake method)
+<table>
+<tr>
+<td align="center"><img src="docs/images/overlay/waiting.png" alt="Waiting for “Hey Sirena”" width="260"><br><sub>Waiting for “Hey Sirena”</sub></td>
+<td align="center"><img src="docs/images/overlay/awake-result.png" alt="Command done" width="260"><br><sub>Command done</sub></td>
+<td align="center"><img src="docs/images/overlay/confirm.png" alt="Asking before sending" width="260"><br><sub>Asking before sending</sub></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/images/overlay/dictating.png" alt="Dictating" width="260"><br><sub>Dictating</sub></td>
+<td align="center"><img src="docs/images/overlay/reading.png" alt="Reading aloud" width="260"><br><sub>Reading aloud</sub></td>
+<td align="center"><img src="docs/images/overlay/error.png" alt="Something went wrong" width="260"><br><sub>Something went wrong</sub></td>
+</tr>
+</table>
+
+* **Three listening states.** *Off*: mic closed. *Waiting*: only “Hey Sirena” wakes her. *Awake*: she listens
+  to everything, and each pause ends a sentence. “Sirena, wait” or 2 minutes of silence sends her back to waiting.
+* **Private while waiting.** “Hey Sirena” is heard by Apple's on-device speech recognition, so no audio leaves
+  the Mac until she is awake (a lock icon shows in the pill). Falls back to streaming if on-device recognition
+  is unavailable; can be turned off in the menu.
+* **Say her name, then the command.** A command runs when it starts with “Sirena” (or a near miss like
+  “Serena”), or has a short command right next to the name (“wait Sirena”).
+* **No name needed for follow-ups.** For 8 seconds after a command (12 after “Hey Sirena”) the next one works
+  without her name; a ring in the pill counts down. For 20 seconds, simple navigation (scroll, tabs, apps,
+  “first link”) still works without it. “again” / “more” repeat the last command.
+* **Ignores chatter.** Fillers (“okay”, “uh”), questions, half-finished commands and room conversation never
+  reach the model.
+* **Asks before anything risky.** Sending, deleting or closing unsaved work shows a question like
+  “Send “see you at 5” in WhatsApp? Yes / Cancel” and waits for “yes” or “cancel” (Enter and Esc work too). After such a question, “Sirena, send” sends what is in the message box.
+
+### Dictation
+
+<p align="center"><img src="docs/images/overlay/demo-dictation.gif" alt="Dictated words streaming into the pill" width="560"></p>
+
+* **“Sirena, type …”** types just that text. **“Sirena, start dictating”** types everything you say until
+  “Sirena, stop”, cleaned up by Muse Spark: no filler words or false starts, proper punctuation, tone fitted to the app.
+* **While dictating:** “delete that”, “new line”, “undo”.
+* **Lists.** “first point…”, “point two…”, “next item…” land on their own numbered lines.
+* **Edits.** “make that a list”, “fix the grammar”, “separate the points with two line breaks” rewrite
+  what you dictated, in place. They only touch dictated text, a selection in a text field, or a text field's contents.
+
+### Around the screen
+
+<p align="center"><img src="docs/images/windows/numbers-mode.png" alt="“Sirena, show numbers”: a numbered badge on every button, then “click 12”" width="640"></p>
+
+* **Numbers mode.** “Sirena, show numbers” puts a badge on every clickable thing in the front window, then “click 7”.
+* **Websites.** “Open YouTube / Gmail…” opens the site (or its tab if already open) in the browser you use.
+  “Open Google Chrome” still opens the app. Searches go there too.
+* **Search results.** “first link”, “the second one”, “open the third result” work instantly, skipping ads and
+  navigation links. “Close all tabs” closes every tab in the window you see.
+* **Copy without selecting.** “Copy the first paragraph / the title / the last message / the paragraph about …”
+  finds the text, copies it, highlights it and shows the first words.
+* **Read aloud.** “Read this” (selection), “read the article” (main text only), “read the page”. While reading,
+  “stop”, “pause”, “resume”, “faster”, “slower” work without her name.
+* **Several screens.** “Move this window to the other screen / the left monitor / screen 2”,
+  “switch to the other screen”. The pill shows on every screen; the one with the front window is highlighted.
+
+### Shortcuts, notes and learning
+
+<table>
+<tr>
+<td align="center"><img src="docs/images/windows/shortcut-book.png" alt="Shortcut book" width="400"><br><sub>Shortcut book</sub></td>
+<td align="center"><img src="docs/images/windows/suggestions.png" alt="Learned suggestions" width="400"><br><sub>Learned suggestions</sub></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/images/windows/notes.png" alt="Notes and snippets" width="400"><br><sub>Notes and snippets</sub></td>
+<td align="center"><img src="docs/images/windows/history.png" alt="History" width="400"><br><sub>History</sub></td>
+</tr>
+</table>
+
+* **Shortcut book.** Save your own commands: “call mom” = “open WhatsApp, select Mother and call her”.
+  Sirena writes the steps (following `docs/shortcut-rulebook.md`) and you check them before saving. Supports
+  placeholders (“message {person} saying {text}”). Also runs your Apple Shortcuts by name.
+* **Notes and snippets.** “Sirena, note …” saves a note without leaving your app; “Sirena, insert my email”
+  types a saved snippet.
+* **Learning.** After you turn her off, Sirena looks for commands you corrected, undid, or finished by hand,
+  and suggests shortcuts for them (“Suggestions” in the menu). Local only, no tokens, at most once a day.
+  “Sirena, forget that” removes a learned shortcut.
+
+### Under the hood
+
+* **Clean audio.** The mic goes through Apple's voice processing (noise suppression, gain control, echo
+  cancellation). Sirena's own voice is filtered out while she reads.
+* **Hears names right.** The recognizer is told the names of your open apps, windows, browser tabs and your
+  custom words, so “switch to the Meta docs tab” comes through correctly.
+* **Overlay that stays out of the way.** A floating pill that never takes focus, on every screen and Space,
+  even over full-screen apps. Each screen remembers where you put it. Optional timing per step
+  (speech · understanding · action).
+* **History.** Every sentence, how it was handled and how long it took is saved to
+  `~/Library/Application Support/Sirena/history.jsonl` (never audio). The History window has search, filters
+  and “Run again”.
+* **Dev mode.** A live usage panel (audio seconds, tokens, screen reads, estimated cost, latency, failures)
   and a log of every session in `~/Library/Application Support/Sirena/sessions.jsonl`.
-* **History.** Every utterance, how it was routed, the layer used, the action and its latency go to
-  `~/Library/Application Support/Sirena/history.jsonl`. No audio is stored. The history window groups it by
-  session, with search, filters by type and layer, latency, and "Run again".
 
-While the screenshot fallback works, other speech does not interrupt it: only "cancel", "stop" or the answer to its
-confirmation. Its confirmations name the item it will act on ("Click “Mark” (the first item in the “Chats” list) in
-WhatsApp?"), never a window or page title. It runs at most 6 steps and 30 seconds, only for requests that name what to
-act on ("click consent" yes, "this one" or "click it" no), asks nothing for harmless steps, and says so when it could
-not act. A question ("what's on my screen?") gets one look and a one-line answer, never clicks; an app, tab or site
-that does not exist ("switch to Zorbulator") stops at "I couldn't find it" instead of a screenshot hunt. "Click X" and
-"focus X" search the whole window for the label (and the app's other windows) when the first snapshot missed it,
-e.g. a cookie dialog at the end of a long page. Typing refuses with a reason when no text field has the focus, and a
-command the recognizer garbled is never typed into a field ("start dating" is "start dictating").
+<p align="center"><img src="docs/images/windows/dev-panel.png" alt="Dev-mode usage panel" width="330"></p>
 
-Results pages: "first link", "the second one", "open the third result" open that result of the page in front
-without the model (navigation, ads and "skip to content" links are left out). "Close all tabs" always closes every
-tab of the window you see and leaves one empty tab.
+<details>
+<summary><b>How the screenshot fallback behaves</b></summary>
+
+When the faster layers can't do a command, Sirena looks at the screen (“Looking at the screen…”):
+
+* Other speech doesn't interrupt it, only “cancel”, “stop” or the answer to its question.
+* Its questions name the exact thing it will act on (“Click “Mark” (the first item in the “Chats” list) in
+  WhatsApp?”), never a window or page title. Harmless steps need no question.
+* At most 6 steps and 30 seconds, and only for requests that say what to act on (“click consent” yes,
+  “click it” no). It says so when it couldn't act.
+* A question (“what's on my screen?”) gets one look and a one-line answer, never a click.
+* An app, tab or site that doesn't exist (“switch to Zorbulator”) stops at “I couldn't find it” instead of a search.
+* “Click X” and “focus X” search the whole window (and the app's other windows) when the first look missed it,
+  e.g. a cookie banner at the bottom of a long page.
+* Typing refuses with a reason when no text field is focused, and a garbled command is never typed into a field
+  (“start dating” means “start dictating”).
+
+</details>
 
 ## Requirements
 
