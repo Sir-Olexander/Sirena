@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Colors for the pill, taken from the logo (Resources/Logo.svg): silvery-white line art on near-black.
+/// Colors for the pill, taken from the original logo drawing: silvery-white line art on near-black.
 /// Each state keeps a faint tint of its own so it can be told apart at a glance.
 enum SirenaPalette {
     /// The logo's background.
