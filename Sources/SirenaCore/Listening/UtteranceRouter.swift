@@ -60,6 +60,21 @@ public enum UtteranceRouter {
                                        "no thanks", "forget it", "cancel that", "no no",
                                        "não", "nao", "não não", "cancela", "cancelar", "para", "esquece", "não envies", "não mandes", "deixa"]
 
+    /// A draft (partial) transcript that is exactly the wake phrase ("Hey Sirena", "Sirena, wake up"): wake at once.
+    /// Partials are cumulative from the start of the utterance, so the phrase must open what was said.
+    public static func wakesEarly(partial: String) -> Bool { WakeWord.isWakePhrase(partial) }
+
+    public enum AfterEarlyWake: Equatable { case stayAwake, command(String), withdraw }
+
+    /// What the final transcript of an utterance that woke her early means, judged by the waiting-state rules.
+    public static func afterEarlyWake(final text: String) -> AfterEarlyWake {
+        switch route(text, context: RouterContext(state: .waiting)) {
+        case .wake: return .stayAwake
+        case .wakeWithCommand(let cmd): return .command(cmd)
+        default: return .withdraw
+        }
+    }
+
     public static func route(_ raw: String, context: RouterContext) -> Route {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let norm = WakeWord.normalize(text)

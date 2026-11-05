@@ -14,9 +14,11 @@ enum SirenaPalette {
     /// Silver lilac: reading aloud.
     static let lilac = Color(red: 0.80, green: 0.77, blue: 0.97)
 
-    /// Pill fills: the logo's black, barely tinted toward the state's accent.
-    static let inkFill = ink.opacity(0.86)
-    static let pearlFill = Color(red: 0.10, green: 0.08, blue: 0.05).opacity(0.92)
-    static let lilacFill = Color(red: 0.07, green: 0.06, blue: 0.11).opacity(0.92)
-    static let errorFill = Color(red: 0.30, green: 0.07, blue: 0.08).opacity(0.92)
+    /// Pill fills: the logo's black, barely tinted toward the state's accent, and see-through.
+    /// At rest ("Listening", waiting) the pill is lightest; with text to read it gets more backing.
+    static let restFill = ink.opacity(0.25)
+    static let inkFill = ink.opacity(0.42)
+    static let pearlFill = Color(red: 0.10, green: 0.08, blue: 0.05).opacity(0.5)
+    static let lilacFill = Color(red: 0.07, green: 0.06, blue: 0.11).opacity(0.5)
+    static let errorFill = Color(red: 0.30, green: 0.07, blue: 0.08).opacity(0.7)
 }
