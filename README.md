@@ -1,8 +1,8 @@
 <p align="center"><img src="docs/images/banner-hackathon.png" alt="Sirena: use your Mac hands-free. Talk to her to control apps, tabs and buttons, or to dictate clean text into any app. Built for the Meta Global AI Developer Hackathon 2026." width="100%"></p>
 
-<p align="center"><img src="docs/images/overlay/demo-command.gif" alt="Saying “Sirena, switch to Chrome”: the pill wakes, shows the words live, then confirms" width="560"></p>
-
 ## What you can say
+
+These are only examples. Talk to her the way you would ask someone to do something on your computer for you while you watch.
 
 | You say | Sirena does |
 |---|---|
@@ -16,6 +16,8 @@
 | “Sirena, move this window to the other screen” | Moves the window to your second display |
 
 She works in Portuguese too (“para”, “espera”, “cancela”, “sim”, “não”).
+
+<p align="center"><img src="docs/images/overlay/demo-command.gif" alt="Saying “Sirena, switch to Chrome”: the pill wakes, shows the words live, then confirms" width="560"></p>
 
 ## Why it feels fast
 
